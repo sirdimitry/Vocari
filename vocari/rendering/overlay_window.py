@@ -4,8 +4,9 @@ from __future__ import annotations
 import math
 import random
 
+import numpy as np
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QMouseEvent, QPainter, QPixmap, QWheelEvent
+from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 from vocari.config.settings import OverlayConfig, RenderConfig
@@ -22,18 +23,37 @@ BLINK_MIN_INTERVAL_MS = 2000
 BLINK_MAX_INTERVAL_MS = 6000
 BLINK_CLOSED_DURATION_MS = 150
 
-# Procedural idle sway (e.g. the ahoge) and talk bounce (the whole avatar,
-# triggered by set_talking() once Stage 3 wires up TTS playback) — no extra
-# art needed, just a small per-frame offset. Both are gated by the "Покачивание"
-# toggle in settings.
+# Procedural idle sway (e.g. the ahoge) — no extra art needed, just a small
+# per-frame offset — plus an audio-reactive talk bounce driven by whatever
+# level AudioPlayer reports (see set_bounce_level): louder/sharper audio
+# pushes the whole avatar further, quiet passages let it settle back down.
+# Both are gated by the "Покачивание" toggle in settings.
 ANIMATION_INTERVAL_MS = 33  # ~30 FPS, matches the spec's render timer cap
 TWO_PI = 2 * math.pi
 SWAY_AMPLITUDE_PX = 6.0
 SWAY_PERIOD_S = 2.6
 SWAY_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / SWAY_PERIOD_S
-BOUNCE_AMPLITUDE_PX = 10.0
-BOUNCE_PERIOD_S = 0.5
-BOUNCE_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / BOUNCE_PERIOD_S
+BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
+BOTTOM_EDGE_CHECK_ROWS = 4  # a layer with opaque pixels this close to the
+# canvas bottom is treated as "flush with the frame" (e.g. a torso/long hair
+# cropped by the canvas edge, no art below it) and excluded from the bounce —
+# otherwise moving it up would tear it away from the window's bottom edge and
+# leave a transparent gap where a streamer framed the source flush at the bottom.
+
+
+def _touches_bottom_edge(pixmap: QPixmap, rows: int = BOTTOM_EDGE_CHECK_ROWS) -> bool:
+    if pixmap.isNull():
+        return False
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    width, height = image.width(), image.height()
+    if width == 0 or height == 0:
+        return False
+    buffer = image.constBits()
+    stride = image.bytesPerLine()
+    arr = np.frombuffer(buffer, dtype=np.uint8, count=stride * height).reshape(height, stride)
+    arr = arr[:, : width * 4].reshape(height, width, 4)
+    bottom_rows = arr[max(0, height - rows) :, :, 3]  # alpha channel (ARGB32 is B,G,R,A in memory)
+    return bool((bottom_rows > 10).any())
 
 
 class OverlayWindow(QWidget):
@@ -45,6 +65,7 @@ class OverlayWindow(QWidget):
 
         self._z_order = model.build_z_order()
         self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
+        self._bottom_anchored: set[str] = self._compute_bottom_anchored()
         # Stage 1 default state: eyes open, mouth closed (per spec).
         self._active_frame: dict[str, str] = {"eyes": "open", "mouth": "closed"}
         self._drag_offset: QPoint | None = None
@@ -69,8 +90,8 @@ class OverlayWindow(QWidget):
         # -- procedural sway/bounce ---------------------------------------
         self._sway_enabled = render_config.enable_sway
         self._talking = False
+        self._bounce_level = 0.0  # 0..1, driven by AudioPlayer via set_bounce_level()
         self._sway_phase = 0.0
-        self._bounce_phase = 0.0
         self._sway_layer_phase: dict[str, float] = {}
         self._recompute_sway_layers()
 
@@ -84,6 +105,7 @@ class OverlayWindow(QWidget):
         self.model = model
         self._z_order = model.build_z_order()
         self._pixmaps = self._load_pixmaps()
+        self._bottom_anchored = self._compute_bottom_anchored()
         self._active_frame = {"eyes": "open", "mouth": "closed"}
         self._apply_scale()
         self.setWindowTitle(f"Vocari - {model.name}")
@@ -102,6 +124,12 @@ class OverlayWindow(QWidget):
         for filename in self.model.all_filenames():
             pixmaps[filename] = QPixmap(str(self.model.layer_path(filename)))
         return pixmaps
+
+    def _compute_bottom_anchored(self) -> set[str]:
+        anchored = {fn for fn, pm in self._pixmaps.items() if _touches_bottom_edge(pm)}
+        if anchored:
+            logger.debug("Слои у нижнего края холста (не участвуют в подпрыгивании): %s", ", ".join(sorted(anchored)))
+        return anchored
 
     def _apply_scale(self) -> None:
         width, height = self.model.canvas_size
@@ -140,13 +168,22 @@ class OverlayWindow(QWidget):
         self.update()
 
     def set_talking(self, talking: bool) -> None:
-        """Called during TTS playback (Stage 3) to trigger the talk bounce."""
-        if self._talking != talking:
-            self._talking = talking
-            self._update_animation_timer()
+        """Marks whether TTS playback is active — mostly informational; the
+        actual bounce motion comes from set_bounce_level()."""
+        self._talking = talking
+        if not talking:
+            self.set_bounce_level(0.0)
+
+    def set_bounce_level(self, level: float) -> None:
+        """Called by AudioPlayer on every playback tick with a smoothed 0..1
+        loudness level — see audio_player.py's envelope follower. Repaints
+        immediately rather than waiting on the idle-sway timer, since this is
+        meant to track the audio closely."""
+        self._bounce_level = max(0.0, min(1.0, level))
+        self.update()
 
     def _animation_active(self) -> bool:
-        return self._sway_enabled and (bool(self._sway_layer_phase) or self._talking)
+        return self._sway_enabled and bool(self._sway_layer_phase)
 
     def _update_animation_timer(self) -> None:
         should_run = self._animation_active()
@@ -158,7 +195,6 @@ class OverlayWindow(QWidget):
 
     def _on_animation_tick(self) -> None:
         self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
-        self._bounce_phase = (self._bounce_phase + BOUNCE_PHASE_STEP) % TWO_PI
         self.update()
 
     # -- painting ---------------------------------------------------------
@@ -180,27 +216,29 @@ class OverlayWindow(QWidget):
                 painter.scale(self.width() / canvas_w, self.height() / canvas_h)
 
             bounce_offset = 0.0
-            if self._sway_enabled and self._talking:
-                bounce_offset = BOUNCE_AMPLITUDE_PX * math.sin(self._bounce_phase)
+            if self._sway_enabled and self._bounce_level > 0.0:
+                # Negative = upward hop, scaled by how loud/sharp the current
+                # audio is — not a fixed-rate oscillation.
+                bounce_offset = -self._bounce_level * BOUNCE_AMPLITUDE_PX
 
             for kind, ref in self._z_order:
-                pixmap = self._resolve_pixmap(kind, ref)
+                pixmap, filename = self._resolve_layer(kind, ref)
                 if pixmap is None or pixmap.isNull():
                     continue
-                y_offset = bounce_offset
+                y_offset = 0.0 if filename in self._bottom_anchored else bounce_offset
                 if self._sway_enabled and kind == "layer" and ref in self._sway_layer_phase:
                     y_offset += SWAY_AMPLITUDE_PX * math.sin(self._sway_phase + self._sway_layer_phase[ref])
                 painter.drawPixmap(0, round(y_offset), pixmap)
         finally:
             painter.end()
 
-    def _resolve_pixmap(self, kind: str, ref: str) -> QPixmap | None:
+    def _resolve_layer(self, kind: str, ref: str) -> tuple[QPixmap | None, str | None]:
         if kind == "layer":
-            return self._pixmaps.get(ref)
+            return self._pixmaps.get(ref), ref
         group = self.model.states[ref]
         frame_name = self._active_frame.get(ref, next(iter(group.frames)))
         filename = group.frames.get(frame_name)
-        return self._pixmaps.get(filename) if filename else None
+        return (self._pixmaps.get(filename) if filename else None), filename
 
     # -- drag to move -------------------------------------------------------
 

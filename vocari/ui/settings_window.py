@@ -67,8 +67,8 @@ class RenderTab(QWidget):
         layout.addLayout(sway_row)
 
         sway_note = QLabel(
-            "Подпрыгивание тела сработает, когда на Этапе 3 подключится TTS — "
-            "пока эффективно только покачивание ахоге."
+            "Подпрыгивание тела во время речи реагирует на громкость звука "
+            "(громче/резче звук — резче скачок), а не просто качается по таймеру."
         )
         sway_note.setWordWrap(True)
         sway_note.setStyleSheet("color: gray; font-size: 11px;")

@@ -66,6 +66,7 @@ def main() -> None:
     audio_player = AudioPlayer(
         on_mouth_state=lambda is_open: window.set_active_frame("mouth", "open" if is_open else "closed"),
         on_talking=window.set_talking,
+        on_audio_level=window.set_bounce_level,
     )
 
     log_window = LogWindow(log_file)
