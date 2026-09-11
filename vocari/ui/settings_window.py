@@ -20,6 +20,9 @@ from vocari.__version__ import __version__
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering.model_import import import_model_from_folder
+from vocari.tts.audio_player import AudioPlayer
+from vocari.tts.base import TTSProvider
+from vocari.ui.test_tab import TestTab
 from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
@@ -156,15 +159,18 @@ class SettingsWindow(QWidget):
         config: AppConfig,
         on_model_imported: Callable[[Path], None],
         on_sway_toggled: Callable[[bool], None],
+        tts_provider: TTSProvider,
+        audio_player: AudioPlayer,
     ):
         super().__init__()
         self.config = config
         self.setWindowTitle(f"Vocari — настройки (v{__version__})")
-        self.resize(460, 300)
+        self.resize(460, 320)
 
         tabs = QTabWidget(self)
         tabs.addTab(RenderTab(config, on_sway_toggled), "Рендер")
         tabs.addTab(ModelTab(config, on_model_imported), "Модель")
+        tabs.addTab(TestTab(config, tts_provider, audio_player), "Тест")
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)

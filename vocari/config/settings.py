@@ -32,9 +32,20 @@ class RenderConfig:
 
 
 @dataclass
+class TTSConfig:
+    voice_ru: str = "ru-RU-SvetlanaNeural"
+    voice_en: str = "en-US-JennyNeural"
+    rate_percent: int = 0  # edge-tts speaking-rate offset, e.g. -10 .. +50
+    volume_percent: int = 0  # edge-tts volume offset, e.g. -50 .. +50
+    auto_detect_language: bool = True
+    max_chars: int = 200
+
+
+@dataclass
 class AppConfig:
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     render: RenderConfig = field(default_factory=RenderConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
@@ -50,8 +61,13 @@ class AppConfig:
             return cls()
         overlay = OverlayConfig(**{**asdict(OverlayConfig()), **data.get("overlay", {})})
         render = RenderConfig(**{**asdict(RenderConfig()), **data.get("render", {})})
-        return cls(overlay=overlay, render=render)
+        tts = TTSConfig(**{**asdict(TTSConfig()), **data.get("tts", {})})
+        return cls(overlay=overlay, render=render, tts=tts)
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
-        payload = {"overlay": asdict(self.overlay), "render": asdict(self.render)}
+        payload = {
+            "overlay": asdict(self.overlay),
+            "render": asdict(self.render),
+            "tts": asdict(self.tts),
+        }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

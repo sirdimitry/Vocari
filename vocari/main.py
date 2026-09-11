@@ -11,6 +11,8 @@ from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger, setup_logging
 from vocari.rendering.model import load_model
 from vocari.rendering.overlay_window import OverlayWindow
+from vocari.tts.audio_player import AudioPlayer
+from vocari.tts.edge_provider import EdgeTTSProvider
 from vocari.ui.log_window import LogWindow
 from vocari.ui.settings_window import SettingsWindow
 from vocari.ui.tray_icon import TrayController
@@ -53,12 +55,21 @@ def main() -> None:
         window.set_model(new_model)
         logger.info("Оверлей обновлён: модель '%s'", new_model.name)
 
+    tts_provider = EdgeTTSProvider()
+    audio_player = AudioPlayer(
+        on_mouth_state=lambda is_open: window.set_active_frame("mouth", "open" if is_open else "closed"),
+        on_talking=window.set_talking,
+    )
+
     log_window = LogWindow(log_file)
-    settings_window = SettingsWindow(config, on_model_imported, window.set_sway_enabled)
+    settings_window = SettingsWindow(
+        config, on_model_imported, window.set_sway_enabled, tts_provider, audio_player
+    )
     tray = TrayController(window, app, log_window, settings_window)  # noqa: F841
 
     def on_quit() -> None:
         logger.info("Vocari завершает работу")
+        audio_player.stop()
         window.sync_geometry_to_config()
         config.save()
 
