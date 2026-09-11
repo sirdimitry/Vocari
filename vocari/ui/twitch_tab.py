@@ -24,7 +24,7 @@ from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
 
-TOKEN_GENERATOR_URL = "https://twitchapps.com/tmi/"
+TOKEN_GENERATOR_URL = "https://twitchtokengenerator.com/"
 
 STATUS_TEXT = {
     "connecting": ("Подключение…", "gray"),
@@ -48,13 +48,15 @@ class TwitchTab(QWidget):
         layout.addWidget(connect_label)
 
         steps_label = QLabel(
-            "1. Нажмите кнопку ниже — откроется страница входа через Twitch "
+            "1. Нажмите кнопку ниже — откроется генератор токенов Twitch "
             "(это НЕ пароль от аккаунта, а отдельный токен для чат-ботов — "
             "стандартный способ авторизации у Twitch).<br>"
-            "2. Войдите под аккаунтом, которым бот будет писать в чат (можно "
-            "тем же, что и канал), разрешите доступ.<br>"
-            "3. Страница покажет токен вида <b>oauth:abcdefg...</b> — скопируйте "
-            "его целиком и вставьте в поле «OAuth-токен» ниже."
+            "2. Выберите пресет <b>«Bot Chat Token»</b> (или вручную отметьте "
+            "разрешения <b>chat:read</b> и <b>chat:edit</b>), нажмите "
+            "«Generate Token» и войдите под аккаунтом, которым бот будет "
+            "писать в чат (можно тем же, что и канал).<br>"
+            "3. Скопируйте <b>Access Token</b> и вставьте его в поле «OAuth-токен» "
+            "ниже — с префиксом <b>oauth:</b> или без него, оба варианта подходят."
         )
         steps_label.setWordWrap(True)
         layout.addWidget(steps_label)
@@ -202,10 +204,14 @@ class TwitchTab(QWidget):
 
     def _save(self) -> None:
         token = self.token_edit.text().strip()
-        if token and not token.startswith("oauth:"):
+        # Twitch's token generator gives a raw access token with no "oauth:"
+        # prefix — that's fine, twitchio accepts it with or without one — so
+        # this only flags pastes that are clearly wrong (too short, or
+        # contain whitespace from a botched copy), not the missing prefix.
+        if token and (len(token) < 20 or " " in token):
             self.token_format_hint.setText(
-                "Похоже, в токене нет префикса \"oauth:\" в начале — обычно он "
-                "выглядит как oauth:abcdefg... Проверьте, что скопировали токен целиком."
+                "Токен выглядит подозрительно коротким или с пробелом внутри — "
+                "проверьте, что скопировали его целиком."
             )
             self.token_format_hint.show()
         else:
