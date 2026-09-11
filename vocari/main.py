@@ -1,6 +1,7 @@
 """Entry point: loads config + avatar model and shows the transparent overlay window."""
 from __future__ import annotations
 
+import signal
 import sys
 from pathlib import Path
 
@@ -29,6 +30,12 @@ def main() -> None:
     # The overlay window is frameless; hiding it must not quit the app — only
     # the tray icon's "Выход" should.
     app.setQuitOnLastWindowClosed(False)
+
+    # Ctrl+C in a terminal otherwise raises KeyboardInterrupt inside whatever
+    # Qt callback happens to be running (paintEvent, a timer tick, ...),
+    # which can leave things like an in-progress QPainter half-finished.
+    # Route it through a clean app.quit() instead.
+    signal.signal(signal.SIGINT, lambda *_args: app.quit())
 
     logger.info("Vocari v%s запускается", __version__)
 

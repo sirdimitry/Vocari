@@ -165,26 +165,34 @@ class OverlayWindow(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        try:
+            # If anything below raises mid-paint (e.g. a KeyboardInterrupt
+            # delivered while Ctrl+C-ing the app in a terminal — the ~30 FPS
+            # animation timer is what lets Python notice SIGINT at all in a Qt
+            # app), an unclosed QPainter leaves the backing store thinking a
+            # paint is still in progress, which cascades into endless
+            # "Painter not active" errors. The try/finally guarantees end()
+            # still runs.
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        canvas_w, canvas_h = self.model.canvas_size
-        if self.width() and self.height():
-            painter.scale(self.width() / canvas_w, self.height() / canvas_h)
+            canvas_w, canvas_h = self.model.canvas_size
+            if self.width() and self.height():
+                painter.scale(self.width() / canvas_w, self.height() / canvas_h)
 
-        bounce_offset = 0.0
-        if self._sway_enabled and self._talking:
-            bounce_offset = BOUNCE_AMPLITUDE_PX * math.sin(self._bounce_phase)
+            bounce_offset = 0.0
+            if self._sway_enabled and self._talking:
+                bounce_offset = BOUNCE_AMPLITUDE_PX * math.sin(self._bounce_phase)
 
-        for kind, ref in self._z_order:
-            pixmap = self._resolve_pixmap(kind, ref)
-            if pixmap is None or pixmap.isNull():
-                continue
-            y_offset = bounce_offset
-            if self._sway_enabled and kind == "layer" and ref in self._sway_layer_phase:
-                y_offset += SWAY_AMPLITUDE_PX * math.sin(self._sway_phase + self._sway_layer_phase[ref])
-            painter.drawPixmap(0, round(y_offset), pixmap)
-
-        painter.end()
+            for kind, ref in self._z_order:
+                pixmap = self._resolve_pixmap(kind, ref)
+                if pixmap is None or pixmap.isNull():
+                    continue
+                y_offset = bounce_offset
+                if self._sway_enabled and kind == "layer" and ref in self._sway_layer_phase:
+                    y_offset += SWAY_AMPLITUDE_PX * math.sin(self._sway_phase + self._sway_layer_phase[ref])
+                painter.drawPixmap(0, round(y_offset), pixmap)
+        finally:
+            painter.end()
 
     def _resolve_pixmap(self, kind: str, ref: str) -> QPixmap | None:
         if kind == "layer":
