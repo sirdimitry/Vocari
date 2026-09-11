@@ -1,0 +1,4 @@
+# Extra tools only needed for packaging the .exe (see README "Сборка .exe"),
+# not for running Vocari from source — keep this separate from
+# requirements.txt so a normal dev/user setup doesn't need it.
+pyinstaller>=6.0

@@ -23,6 +23,7 @@ import numpy as np
 import soundfile as sf
 
 from vocari.logging_setup import get_logger
+from vocari.paths import app_root
 from vocari.tts.base import SynthesisResult, TTSProvider
 
 logger = get_logger("tts.silero")
@@ -31,6 +32,11 @@ SAMPLE_RATE = 48000
 REPO = "snakers4/silero-models"
 MODEL_ID_BY_LANG = {"ru": "v4_ru", "en": "v3_en"}
 WARMUP_TEXT = {"ru": "Проверка.", "en": "Check."}
+
+# Kept inside the project (not torch's default ~/.cache/torch/hub) so
+# everything the app downloads lives in one place — gitignored, same as
+# config.json/logs/.
+CACHE_DIR = app_root() / "silero_cache"
 
 TORCH_INSTALL_HINT = "pip install torch --index-url https://download.pytorch.org/whl/cpu"
 
@@ -64,6 +70,9 @@ class SileroTTSProvider(TTSProvider):
         if self._device is None:
             self._device = torch.device("cpu")
             torch.set_num_threads(max(1, os.cpu_count() or 4))
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        torch.hub.set_dir(str(CACHE_DIR))
 
         logger.info("Silero: загрузка модели %s (%s)...", model_id, lang)
         model, _ = torch.hub.load(

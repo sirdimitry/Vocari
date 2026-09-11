@@ -19,12 +19,17 @@ from PySide6.QtWidgets import (
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
+from vocari.paths import app_root
+from vocari.rendering.model import AvatarModel
 from vocari.rendering.model_import import import_model_from_folder
+from vocari.tts.poems import random_poem
+from vocari.tts.tts_queue import TTSQueue
+from vocari.ui.screen_preview import ScreenPreviewWidget
+from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-MODELS_ROOT = PROJECT_ROOT / "assets" / "models"
+MODELS_ROOT = app_root() / "assets" / "models"
 
 POSITION_RANGE = 20000  # generous bound for multi-monitor setups
 MIN_SCALE_PERCENT = 10
@@ -35,15 +40,20 @@ class ModelTab(QWidget):
     def __init__(
         self,
         config: AppConfig,
+        model: AvatarModel,
         on_model_imported: Callable[[Path], None],
         on_position_changed: Callable[[int, int], None],
         on_scale_changed: Callable[[float], None],
+        on_entrance_side_toggled: Callable[[bool], None],
+        tts_queue: TTSQueue,
     ):
         super().__init__()
         self.config = config
         self.on_model_imported = on_model_imported
         self.on_position_changed = on_position_changed
         self.on_scale_changed = on_scale_changed
+        self.on_entrance_side_toggled = on_entrance_side_toggled
+        self.tts_queue = tts_queue
 
         layout = QVBoxLayout(self)
 
@@ -102,6 +112,49 @@ class ModelTab(QWidget):
         apply_row.addWidget(apply_button)
         layout.addLayout(apply_row)
 
+        preview_label = QLabel("Превью позиции на экране")
+        preview_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        layout.addWidget(preview_label)
+
+        preview_hint = QLabel(
+            "Чёрный прямоугольник — ваш экран целиком; зелёная рамка — где встанет "
+            "аватар, когда говорит. Перетащите рамку мышью, чтобы задать позицию, "
+            "не подбирая X/Y на глаз. Жёлтая стрелка показывает, с какой стороны "
+            "аватар выезжает и упрыгивает."
+        )
+        preview_hint.setWordWrap(True)
+        preview_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(preview_hint)
+
+        self.preview = ScreenPreviewWidget(config, model, self._on_preview_dragged)
+        layout.addWidget(self.preview)
+
+        side_row = QHBoxLayout()
+        side_row.addWidget(QLabel("Выезд справа (вместо слева)"))
+        side_row.addStretch()
+        self.entrance_side_toggle = ToggleSwitch()
+        self.entrance_side_toggle.setChecked(config.render.entrance_from_right)
+        self.entrance_side_toggle.toggled.connect(self._on_entrance_side_toggled)
+        side_row.addWidget(self.entrance_side_toggle)
+        layout.addLayout(side_row)
+
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("Тест (случайный стишок)")
+        self.test_button.clicked.connect(self._on_test_clicked)
+        test_row.addWidget(self.test_button)
+        test_row.addStretch()
+        layout.addLayout(test_row)
+
+        test_hint = QLabel(
+            "Каждое нажатие добавляет в очередь случайный четырёхстрочный стишок "
+            "(на английском или русском) — жмите несколько раз подряд, чтобы "
+            "увидеть на реальном оверлее, как аватары выстраиваются в очередь и "
+            "сменяют друг друга (до 7 одновременно)."
+        )
+        test_hint.setWordWrap(True)
+        test_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(test_hint)
+
         layout.addStretch()
 
     def _apply_geometry(self) -> None:
@@ -110,7 +163,29 @@ class ModelTab(QWidget):
         self.on_position_changed(x, y)
         self.on_scale_changed(scale)
         self.config.save()
+        self.preview.update()
         logger.info("Позиция/масштаб оверлея изменены из настроек: (%d, %d), %.0f%%", x, y, scale * 100)
+
+    def _on_preview_dragged(self, x: int, y: int) -> None:
+        self.pos_x_spin.blockSignals(True)
+        self.pos_y_spin.blockSignals(True)
+        self.pos_x_spin.setValue(x)
+        self.pos_y_spin.setValue(y)
+        self.pos_x_spin.blockSignals(False)
+        self.pos_y_spin.blockSignals(False)
+        self.on_position_changed(x, y)
+
+    def _on_entrance_side_toggled(self, checked: bool) -> None:
+        self.config.render.entrance_from_right = checked
+        self.config.save()
+        self.on_entrance_side_toggled(checked)
+        self.preview.update()
+        logger.info("Выезд аватара: %s", "справа" if checked else "слева")
+
+    def _on_test_clicked(self) -> None:
+        text = random_poem()
+        self.tts_queue.enqueue(text)
+        logger.info("Тест (стишок): '%s'", text)
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Папка с PNG-слоями модели")
@@ -145,3 +220,8 @@ class ModelTab(QWidget):
             ", ".join(result.detected_states) or "нет",
         )
         self.on_model_imported(result.target_dir)
+
+    def set_model(self, model: AvatarModel) -> None:
+        """Keeps the preview's canvas size in sync after a hot-swapped model
+        import (see main.py's on_model_imported)."""
+        self.preview.set_model(model)

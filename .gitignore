@@ -9,8 +9,16 @@ __pycache__/
 # Runtime-generated, machine-specific
 config.json
 logs/
+silero_cache/
+
+# PyInstaller build output (see vocari.spec / README "Сборка .exe")
+build/
+dist/
 
 # Editors / OS
 .vscode/
 .idea/
 Thumbs.db
+
+# Claude Code local runtime state
+.claude/

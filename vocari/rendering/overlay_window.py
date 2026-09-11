@@ -1,4 +1,10 @@
-"""Transparent, frameless, always-on-top overlay window that renders the avatar."""
+"""Transparent, frameless overlay window that renders the "stage" — zero or
+more avatar instances (see rendering/stage.py) that jump in to speak and
+jump back out. The window is sized for the worst case (a full queue of 7),
+so it's much wider than a single avatar and mostly transparent/empty most
+of the time; the avatar's configured X/Y position is where the *speaker*
+slot lands on screen, not the window's own top-left corner — see
+_stage_offset_px()."""
 from __future__ import annotations
 
 import math
@@ -12,6 +18,7 @@ from PySide6.QtWidgets import QWidget
 from vocari.config.settings import OverlayConfig, RenderConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering.model import AvatarModel
+from vocari.rendering.stage import AvatarInstance, Stage
 
 logger = get_logger("overlay")
 
@@ -25,7 +32,7 @@ BLINK_CLOSED_DURATION_MS = 150
 
 # Procedural idle sway (e.g. the ahoge, swinging like a real strand of hair
 # from where it's rooted) — no extra art needed — plus an audio-reactive talk
-# bounce driven by whatever level AudioPlayer reports (see set_bounce_level):
+# bounce driven by whatever level AudioPlayer reports (see set_speaker_bounce_level):
 # louder/sharper audio pushes the whole avatar further, quiet passages let it
 # settle back down. Both are gated by the "Покачивание" toggle in settings.
 ANIMATION_INTERVAL_MS = 33  # ~30 FPS, matches the spec's render timer cap
@@ -34,13 +41,9 @@ SWAY_ROTATION_DEG = 11.0
 SWAY_PERIOD_S = 1.8
 SWAY_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / SWAY_PERIOD_S
 BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
-IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle whole-avatar breathing-like bob, always on
+IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle breathing-like bob, applied to every instance on stage
 IDLE_BOB_PERIOD_S = 2.4
 IDLE_BOB_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / IDLE_BOB_PERIOD_S
-# Bounce/bob move every layer together (body, head, hair, ears — the whole
-# figure), by user request, even though that means a layer flush with the
-# canvas's bottom edge (long hair, torso) can show a sliver of transparency
-# there if a streamer crops their OBS source tight to the avatar's bottom.
 
 # bounce_react_layers (e.g. ears): on top of the shared translation above,
 # these also rotate around their own attachment point, with the rotation
@@ -116,42 +119,39 @@ class OverlayWindow(QWidget):
 
         self._z_order = model.build_z_order()
         self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
-        # Stage 1 default state: eyes open, mouth closed (per spec).
-        self._active_frame: dict[str, str] = {"eyes": "open", "mouth": "closed"}
         self._drag_offset: QPoint | None = None
+        self.stage = Stage(
+            canvas_width=model.canvas_size[0], entrance_from_right=render_config.entrance_from_right
+        )
 
+        base_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+            base_flags | Qt.WindowType.WindowStaysOnTopHint
+            if render_config.always_on_top
+            else base_flags
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setWindowTitle(f"Vocari - {model.name}")
 
-        self._apply_scale()
-        self.move(self.config.pos_x, self.config.pos_y)
+        self._apply_geometry()
 
-        self._blink_timer = QTimer(self)
-        self._blink_timer.setSingleShot(True)
-        self._blink_timer.timeout.connect(self._start_blink)
-        self._schedule_next_blink()
-
-        # -- procedural sway/bounce ---------------------------------------
+        # -- procedural sway/bounce (cosmetic; gated by "Покачивание") -----
         self._sway_enabled = render_config.enable_sway
-        self._talking = False
-        self._bounce_level = 0.0  # 0..1, driven by AudioPlayer via set_bounce_level()
         self._sway_phase = 0.0
         self._idle_bob_phase = 0.0
         self._sway_layer_phase: dict[str, float] = {}
         self._sway_layer_pivot: dict[str, tuple[float, float]] = {}
         self._bounce_react_pivot: dict[str, tuple[float, float]] = {}
-        self._bounce_react_angle: dict[str, float] = {}
         self._recompute_sway_layers()
 
+        # Runs continuously — 30 FPS repaint of a mostly-transparent widget
+        # is cheap, and it's needed for the stage slide animation regardless
+        # of whether cosmetic sway is on, so there's no real upside to
+        # starting/stopping it.
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._on_animation_tick)
-        self._update_animation_timer()
+        self._anim_timer.start(ANIMATION_INTERVAL_MS)
 
     def set_model(self, model: AvatarModel) -> None:
         """Hot-swap the displayed model (used by the settings "Модель" tab
@@ -159,12 +159,10 @@ class OverlayWindow(QWidget):
         self.model = model
         self._z_order = model.build_z_order()
         self._pixmaps = self._load_pixmaps()
-        self._active_frame = {"eyes": "open", "mouth": "closed"}
-        self._apply_scale()
+        self.stage.set_canvas_width(model.canvas_size[0])
+        self._apply_geometry()
         self.setWindowTitle(f"Vocari - {model.name}")
-        self._schedule_next_blink()
         self._recompute_sway_layers()
-        self._update_animation_timer()
         self.update()
 
     def _recompute_sway_layers(self) -> None:
@@ -180,13 +178,11 @@ class OverlayWindow(QWidget):
 
         canvas_center_x = self.model.canvas_size[0] / 2
         self._bounce_react_pivot = {}
-        self._bounce_react_angle = {}
         for filename in self.model.bounce_react_layers:
             pixmap = self._pixmaps.get(filename)
             pivot = _attachment_pivot(pixmap, canvas_center_x) if pixmap is not None else None
             if pivot is not None:
                 self._bounce_react_pivot[filename] = pivot
-                self._bounce_react_angle[filename] = 0.0
 
     def _load_pixmaps(self) -> dict[str, QPixmap]:
         pixmaps: dict[str, QPixmap] = {}
@@ -194,105 +190,151 @@ class OverlayWindow(QWidget):
             pixmaps[filename] = QPixmap(str(self.model.layer_path(filename)))
         return pixmaps
 
-    def _apply_scale(self) -> None:
-        width, height = self.model.canvas_size
+    # -- stage geometry ---------------------------------------------------
+
+    def _stage_offset_px(self) -> int:
+        """Screen-pixel distance from the window's left edge to the speaking
+        slot (the stage's draw_origin_x, scaled) — depends on which side the
+        entrance is on (see Stage.draw_origin_x)."""
+        return round(self.stage.draw_origin_x * self.config.scale)
+
+    def _apply_geometry(self) -> None:
+        """Resizes for the (fixed, worst-case-7) stage width and repositions
+        so the *speaking slot* — not the window's own top-left — stays at
+        config.pos_x/pos_y regardless of scale."""
+        canvas_w, canvas_h = self.model.canvas_size
+        stage_w = self.stage.stage_origin_x + canvas_w
         self.resize(
-            max(1, round(width * self.config.scale)),
-            max(1, round(height * self.config.scale)),
+            max(1, round(stage_w * self.config.scale)),
+            max(1, round(canvas_h * self.config.scale)),
         )
+        self.move(self.config.pos_x - self._stage_offset_px(), self.config.pos_y)
 
     def set_scale(self, scale: float) -> None:
-        """From Settings → Модель, as an alternative to the mouse wheel.
-        Caller is responsible for persisting AppConfig (this only holds the
-        OverlayConfig sub-section, not the full app config)."""
+        """From Settings → Модель, as an alternative to the mouse wheel."""
         self.config.scale = max(MIN_SCALE, min(MAX_SCALE, scale))
-        self._apply_scale()
+        self._apply_geometry()
 
     def set_position(self, x: int, y: int) -> None:
         """From Settings → Модель, as an alternative to dragging the window.
-        Caller is responsible for persisting AppConfig."""
-        self.move(x, y)
-        self.sync_geometry_to_config()
+        x/y here are the *speaking slot's* screen position, same meaning as
+        config.pos_x/pos_y — not the window's own top-left."""
+        self.config.pos_x = x
+        self.config.pos_y = y
+        self.move(x - self._stage_offset_px(), y)
 
-    def set_active_frame(self, state_key: str, frame_name: str) -> None:
-        if self._active_frame.get(state_key) != frame_name:
-            self._active_frame[state_key] = frame_name
-            self.update()
+    def set_always_on_top(self, enabled: bool) -> None:
+        """Live-toggle from Settings → Рендер — lets a game/other app cover
+        the avatar on the streamer's own screen; OBS Window Capture still
+        grabs the window's contents by handle regardless of z-order."""
+        was_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
+        if was_visible:
+            self.show()  # Qt requires re-showing after a window flag change
 
-    # -- blinking -------------------------------------------------------------
+    def set_entrance_from_right(self, enabled: bool) -> None:
+        """Live-toggle from Settings → Модель: queue/entrance/exit all move
+        to the right side instead of the left. The speaking slot must stay
+        put (config.pos_x/pos_y), so the window geometry is recomputed —
+        the stage's draw_origin_x has moved to the other side."""
+        self.stage.set_entrance_from_right(enabled)
+        self._apply_geometry()
+        self.update()
 
-    def _schedule_next_blink(self) -> None:
+    # -- stage / speaker control (used by TTSQueue) ------------------------
+
+    def add_speaker(self, text: str) -> AvatarInstance | None:
+        """Requests a new avatar instance for `text`; it immediately claims
+        a stage slot (speaking if free, else the next waiting slot) and
+        starts sliding in from off-screen, or returns None if all 7 slots
+        are taken (caller should keep `text` in its own backlog)."""
+        inst = self.stage.add(text)
+        if inst is not None:
+            self._schedule_next_blink(inst.id)
+        self.update()
+        return inst
+
+    def retire_speaker(self, instance_id: int) -> None:
+        """Always the same: mirror + slide off-screen-left, then remove —
+        called once playback finishes (see Stage.retire's docstring for why
+        there's no "stay put if nobody's queued" branch)."""
+        self.stage.retire(instance_id)
+        self.update()
+
+    def set_speaker_mouth(self, instance_id: int, is_open: bool) -> None:
+        self.stage.set_mouth(instance_id, is_open)
+        self.update()
+
+    def set_speaker_talking(self, instance_id: int, talking: bool) -> None:
+        self.stage.set_talking(instance_id, talking)
+        self.update()
+
+    def set_speaker_bounce_level(self, instance_id: int, level: float) -> None:
+        self.stage.set_bounce_level(instance_id, level)
+        self.update()
+
+    # -- blinking (independent schedule per instance, so simultaneous ------
+    # avatars don't all blink in lockstep)
+
+    def _schedule_next_blink(self, instance_id: int) -> None:
         if "eyes" not in self.model.states:
             return
         delay_ms = random.randint(BLINK_MIN_INTERVAL_MS, BLINK_MAX_INTERVAL_MS)
-        self._blink_timer.start(delay_ms)
+        QTimer.singleShot(delay_ms, lambda: self._start_blink(instance_id))
 
-    def _start_blink(self) -> None:
-        self.set_active_frame("eyes", "closed")
-        QTimer.singleShot(BLINK_CLOSED_DURATION_MS, self._end_blink)
+    def _start_blink(self, instance_id: int) -> None:
+        inst = self.stage.get(instance_id)
+        if inst is None:
+            return  # exited before its next blink came due
+        inst.active_frame["eyes"] = "closed"
+        self.update()
+        QTimer.singleShot(BLINK_CLOSED_DURATION_MS, lambda: self._end_blink(instance_id))
 
-    def _end_blink(self) -> None:
-        self.set_active_frame("eyes", "open")
-        self._schedule_next_blink()
+    def _end_blink(self, instance_id: int) -> None:
+        inst = self.stage.get(instance_id)
+        if inst is None:
+            return
+        inst.active_frame["eyes"] = "open"
+        self.update()
+        self._schedule_next_blink(instance_id)
 
     # -- procedural sway / talk bounce -----------------------------------------
 
     def set_sway_enabled(self, enabled: bool) -> None:
         """Live-toggle from Settings → Рендер → "Покачивание"."""
         self._sway_enabled = enabled
-        self._update_animation_timer()
         self.update()
 
-    def set_talking(self, talking: bool) -> None:
-        """Marks whether TTS playback is active — mostly informational; the
-        actual bounce motion comes from set_bounce_level()."""
-        self._talking = talking
-        if not talking:
-            self.set_bounce_level(0.0)
-
-    def set_bounce_level(self, level: float) -> None:
-        """Called by AudioPlayer on every playback tick with a smoothed 0..1
-        loudness level — see audio_player.py's envelope follower. Repaints
-        immediately rather than waiting on the idle-sway timer, since this is
-        meant to track the audio closely."""
-        self._bounce_level = max(0.0, min(1.0, level))
-        self.update()
-
-    def _animation_active(self) -> bool:
-        # The idle bob runs for any model whenever sway is enabled, not just
-        # ones with rotating sway_layers like the ahoge.
-        return self._sway_enabled
-
-    def _update_animation_timer(self) -> None:
-        should_run = self._animation_active()
-        if should_run and not self._anim_timer.isActive():
-            self._anim_timer.start(ANIMATION_INTERVAL_MS)
-        elif not should_run and self._anim_timer.isActive():
-            self._anim_timer.stop()
-            self.update()  # repaint once more to clear any residual offset
-
-    def _on_animation_tick(self) -> None:
-        self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
-        self._idle_bob_phase = (self._idle_bob_phase + IDLE_BOB_PHASE_STEP) % TWO_PI
-
-        if self._bounce_react_pivot:
-            target_angle = BOUNCE_REACT_DEG_PER_PX * self._current_bounce_offset()
-            for filename in self._bounce_react_pivot:
-                current = self._bounce_react_angle[filename]
-                self._bounce_react_angle[filename] = current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
-
-        self.update()
-
-    def _current_bounce_offset(self) -> float:
+    def _instance_bounce_offset(self, inst: AvatarInstance) -> float:
         if not self._sway_enabled:
             return 0.0
-        # Subtle always-on idle bob (breathing-like) plus, on top of it, an
-        # upward hop scaled by how loud/sharp the current audio is while
-        # talking — not a fixed-rate oscillation.
-        offset = IDLE_BOB_AMPLITUDE_PX * math.sin(self._idle_bob_phase)
-        if self._bounce_level > 0.0:
-            offset += -self._bounce_level * BOUNCE_AMPLITUDE_PX
+        # Subtle always-on idle bob (breathing-like), for anyone currently on
+        # stage, plus — only for the current speaker — an upward hop scaled
+        # by how loud/sharp the audio is, not a fixed-rate oscillation. Each
+        # instance adds its own random phase offset so several avatars on
+        # stage at once don't bob in lockstep.
+        offset = IDLE_BOB_AMPLITUDE_PX * math.sin(self._idle_bob_phase + inst.motion_phase_offset)
+        if inst.phase == "speaking" and inst.bounce_level > 0.0:
+            offset += -inst.bounce_level * BOUNCE_AMPLITUDE_PX
         return offset
+
+    def _on_animation_tick(self) -> None:
+        self.stage.tick()  # entrance/exit/promotion — independent of "Покачивание"
+
+        if self._sway_enabled:
+            self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
+            self._idle_bob_phase = (self._idle_bob_phase + IDLE_BOB_PHASE_STEP) % TWO_PI
+
+            if self._bounce_react_pivot:
+                for inst in self.stage.instances:
+                    target_angle = BOUNCE_REACT_DEG_PER_PX * self._instance_bounce_offset(inst)
+                    for filename in self._bounce_react_pivot:
+                        current = inst.bounce_react_angle.get(filename, 0.0)
+                        inst.bounce_react_angle[filename] = (
+                            current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
+                        )
+
+        self.update()
 
     # -- painting ---------------------------------------------------------
 
@@ -309,49 +351,64 @@ class OverlayWindow(QWidget):
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
             canvas_w, canvas_h = self.model.canvas_size
+            stage_w = self.stage.stage_origin_x + canvas_w
             if self.width() and self.height():
-                painter.scale(self.width() / canvas_w, self.height() / canvas_h)
+                painter.scale(self.width() / stage_w, self.height() / canvas_h)
 
-            bounce_offset = self._current_bounce_offset()
-
-            for kind, ref in self._z_order:
-                pixmap = self._resolve_layer(kind, ref)
-                if pixmap is None or pixmap.isNull():
-                    continue
-                y_offset = bounce_offset
-
-                sway_pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
-                react_pivot = self._bounce_react_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
-                if sway_pivot is not None:
-                    angle = SWAY_ROTATION_DEG * math.sin(self._sway_phase + self._sway_layer_phase[ref])
-                elif react_pivot is not None:
-                    angle = self._bounce_react_angle[ref]
-                else:
-                    angle = None
-
-                pivot = sway_pivot if sway_pivot is not None else react_pivot
-                if pivot is not None:
-                    # Rotate around (pivot_x, pivot_y) in the pixmap's own
-                    # coordinates, then shift the whole result by y_offset —
-                    # i.e. translate to the (bounce-shifted) pivot, rotate,
-                    # then translate back by the *unshifted* pivot so the
-                    # y_offset isn't applied twice.
-                    painter.save()
-                    painter.translate(pivot[0], pivot[1] + y_offset)
-                    painter.rotate(angle)
-                    painter.translate(-pivot[0], -pivot[1])
-                    painter.drawPixmap(0, 0, pixmap)
-                    painter.restore()
-                else:
-                    painter.drawPixmap(0, round(y_offset), pixmap)
+            for inst in self.stage.instances:
+                self._paint_instance(painter, inst, canvas_w)
         finally:
             painter.end()
 
-    def _resolve_layer(self, kind: str, ref: str) -> QPixmap | None:
+    def _paint_instance(self, painter: QPainter, inst: AvatarInstance, canvas_w: int) -> None:
+        painter.save()
+        painter.translate(self.stage.draw_origin_x + inst.x_offset, 0)
+        if inst.mirrored:
+            painter.translate(canvas_w, 0)
+            painter.scale(-1, 1)
+
+        bounce_offset = self._instance_bounce_offset(inst)
+
+        for kind, ref in self._z_order:
+            pixmap = self._resolve_layer(kind, ref, inst.active_frame)
+            if pixmap is None or pixmap.isNull():
+                continue
+            y_offset = bounce_offset
+
+            sway_pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+            react_pivot = self._bounce_react_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+            if sway_pivot is not None:
+                angle = SWAY_ROTATION_DEG * math.sin(
+                    self._sway_phase + self._sway_layer_phase[ref] + inst.motion_phase_offset
+                )
+            elif react_pivot is not None:
+                angle = inst.bounce_react_angle.get(ref, 0.0)
+            else:
+                angle = None
+
+            pivot = sway_pivot if sway_pivot is not None else react_pivot
+            if pivot is not None:
+                # Rotate around (pivot_x, pivot_y) in the pixmap's own
+                # coordinates, then shift the whole result by y_offset —
+                # i.e. translate to the (bounce-shifted) pivot, rotate,
+                # then translate back by the *unshifted* pivot so the
+                # y_offset isn't applied twice.
+                painter.save()
+                painter.translate(pivot[0], pivot[1] + y_offset)
+                painter.rotate(angle)
+                painter.translate(-pivot[0], -pivot[1])
+                painter.drawPixmap(0, 0, pixmap)
+                painter.restore()
+            else:
+                painter.drawPixmap(0, round(y_offset), pixmap)
+
+        painter.restore()
+
+    def _resolve_layer(self, kind: str, ref: str, active_frame: dict[str, str]) -> QPixmap | None:
         if kind == "layer":
             return self._pixmaps.get(ref)
         group = self.model.states[ref]
-        frame_name = self._active_frame.get(ref, next(iter(group.frames)))
+        frame_name = active_frame.get(ref, next(iter(group.frames)))
         filename = group.frames.get(frame_name)
         return self._pixmaps.get(filename) if filename else None
 
@@ -375,7 +432,7 @@ class OverlayWindow(QWidget):
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         factor = SCALE_STEP if event.angleDelta().y() > 0 else 1 / SCALE_STEP
         self.config.scale = max(MIN_SCALE, min(MAX_SCALE, self.config.scale * factor))
-        self._apply_scale()
+        self._apply_geometry()
         self.update()
 
     # -- misc -----------------------------------------------------------------
@@ -392,5 +449,5 @@ class OverlayWindow(QWidget):
         super().closeEvent(event)
 
     def sync_geometry_to_config(self) -> None:
-        self.config.pos_x = self.x()
+        self.config.pos_x = self.x() + self._stage_offset_px()
         self.config.pos_y = self.y()

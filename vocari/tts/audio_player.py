@@ -9,6 +9,11 @@ the audio's RMS amplitude:
   and it settles gently during quiet passages, instead of bouncing at a
   constant rate regardless of loudness.
 
+Only one thing plays at a time (play() cancels whatever was running), so the
+mouth/talking/level callbacks are passed fresh into each play() call rather
+than fixed at construction — the caller (TTSQueue) points them at whichever
+avatar instance is currently the speaker.
+
 Rather than a sounddevice callback (which runs on PortAudio's own thread and
 would need cross-thread marshalling into Qt), this polls elapsed wall-clock
 time on a Qt timer and reads the matching slice of the already-decoded PCM
@@ -47,16 +52,11 @@ RELEASE_COEFF = 0.15
 
 
 class AudioPlayer(QObject):
-    def __init__(
-        self,
-        on_mouth_state: Callable[[bool], None],
-        on_talking: Callable[[bool], None],
-        on_audio_level: Callable[[float], None],
-    ):
+    def __init__(self):
         super().__init__()
-        self._on_mouth_state = on_mouth_state
-        self._on_talking = on_talking
-        self._on_audio_level = on_audio_level
+        self._on_mouth_state: Callable[[bool], None] | None = None
+        self._on_talking: Callable[[bool], None] | None = None
+        self._on_audio_level: Callable[[float], None] | None = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -67,8 +67,18 @@ class AudioPlayer(QObject):
         self._on_finished: Callable[[], None] | None = None
         self._envelope = 0.0
 
-    def play(self, audio_bytes: bytes, volume: float, on_finished: Callable[[], None]) -> None:
-        """volume: 0.0-1.5 linear gain applied before playback."""
+    def play(
+        self,
+        audio_bytes: bytes,
+        volume: float,
+        on_finished: Callable[[], None],
+        on_mouth_state: Callable[[bool], None],
+        on_talking: Callable[[bool], None],
+        on_audio_level: Callable[[float], None],
+    ) -> None:
+        """volume: 0.0-1.5 linear gain applied before playback. The three
+        on_* callbacks target whichever avatar instance is speaking this
+        line — fresh per call, since only one thing plays at a time."""
         data, samplerate = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=False)
         if data.ndim > 1:
             data = data.mean(axis=1)
@@ -76,6 +86,9 @@ class AudioPlayer(QObject):
             data = np.clip(data * volume, -1.0, 1.0)
 
         self.stop()  # cancel any playback already in progress
+        self._on_mouth_state = on_mouth_state
+        self._on_talking = on_talking
+        self._on_audio_level = on_audio_level
         self._pcm = data
         self._samplerate = samplerate
         self._on_finished = on_finished
@@ -87,6 +100,16 @@ class AudioPlayer(QObject):
         self._on_mouth_state(False)
         self._timer.start(POLL_INTERVAL_MS)
 
+    def skip(self) -> None:
+        """Cuts the current utterance short mid-word (the skip hotkey) and
+        runs the exact same "done" path a natural finish would — same
+        on_finished callback, same mouth/talking/level reset — so the
+        stage's exit/promote logic needs no separate code path for this."""
+        if self._pcm is None:
+            return
+        sd.stop()
+        self._finish()
+
     def stop(self) -> None:
         if self._pcm is None:
             return
@@ -94,10 +117,16 @@ class AudioPlayer(QObject):
         self._timer.stop()
         self._pcm = None
         self._envelope = 0.0
-        self._on_talking(False)
-        self._on_mouth_state(False)
-        self._on_audio_level(0.0)
+        if self._on_talking:
+            self._on_talking(False)
+        if self._on_mouth_state:
+            self._on_mouth_state(False)
+        if self._on_audio_level:
+            self._on_audio_level(0.0)
         self._on_finished = None
+        self._on_mouth_state = None
+        self._on_talking = None
+        self._on_audio_level = None
 
     def _on_tick(self) -> None:
         if self._pcm is None:
@@ -120,10 +149,17 @@ class AudioPlayer(QObject):
         self._timer.stop()
         self._pcm = None
         self._envelope = 0.0
-        self._on_talking(False)
-        self._on_mouth_state(False)
-        self._on_audio_level(0.0)
+        on_talking, on_mouth_state, on_audio_level = self._on_talking, self._on_mouth_state, self._on_audio_level
         callback = self._on_finished
         self._on_finished = None
+        self._on_mouth_state = None
+        self._on_talking = None
+        self._on_audio_level = None
+        if on_talking:
+            on_talking(False)
+        if on_mouth_state:
+            on_mouth_state(False)
+        if on_audio_level:
+            on_audio_level(0.0)
         if callback:
             callback()

@@ -8,16 +8,24 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import json
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+from vocari.paths import app_root
+
+PROJECT_ROOT = app_root()
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 
 @dataclass
 class OverlayConfig:
     model_path: str = "assets/models/Ariral"
-    pos_x: int = 100
-    pos_y: int = 100
-    scale: float = 1.0
+    # -1 / 0.0 are "not yet set" sentinels: on first run (no saved config.json
+    # yet), main.py replaces them with values computed from the user's actual
+    # screen resolution and the model's native canvas size — rendering a
+    # PNG's full native pixel size (often 1000+ px) at a screen-agnostic
+    # scale=1.0 could dwarf the user's whole monitor. Once saved, whatever
+    # the user drags/scrolls to is kept as-is on every later run.
+    pos_x: int = -1
+    pos_y: int = -1
+    scale: float = 0.0
 
 
 @dataclass
@@ -29,6 +37,25 @@ class RenderConfig:
     # Лёгкое процедурное покачивание (ахоге/причёска) и подпрыгивание тела во
     # время речи. Тумблер "Покачивание" в настройках выключает оба эффекта разом.
     enable_sway: bool = True
+    # Держать окно аватара поверх всех остальных окон на экране пользователя.
+    # OBS Window Capture захватывает содержимое окна напрямую по хэндлу, не по
+    # области экрана, так что запись работает даже когда окно закрыто другим
+    # приложением/игрой — этот тумблер только про то, что видно на самом
+    # экране стримера, не про то, что попадает в OBS.
+    always_on_top: bool = True
+    # Which side the queue/entrance/exit corridor is on. False (default) =
+    # everyone jumps in and out on the left, matching the original spec;
+    # True mirrors the whole stage layout to the right instead.
+    entrance_from_right: bool = False
+
+
+@dataclass
+class HotkeyConfig:
+    # A QKeySequence string (e.g. "F9" or "Ctrl+Alt+S"), empty = disabled.
+    # Registered as a system-wide hotkey (works even while a game/OBS has
+    # focus) that cuts the currently-speaking avatar's line short and sends
+    # it through the normal exit animation, as if it had just finished.
+    skip_message: str = ""
 
 
 @dataclass
@@ -65,6 +92,7 @@ class AppConfig:
     render: RenderConfig = field(default_factory=RenderConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     twitch: TwitchConfig = field(default_factory=TwitchConfig)
+    hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
@@ -82,7 +110,8 @@ class AppConfig:
         render = RenderConfig(**{**asdict(RenderConfig()), **data.get("render", {})})
         tts = TTSConfig(**{**asdict(TTSConfig()), **data.get("tts", {})})
         twitch = TwitchConfig(**{**asdict(TwitchConfig()), **data.get("twitch", {})})
-        return cls(overlay=overlay, render=render, tts=tts, twitch=twitch)
+        hotkey = HotkeyConfig(**{**asdict(HotkeyConfig()), **data.get("hotkey", {})})
+        return cls(overlay=overlay, render=render, tts=tts, twitch=twitch, hotkey=hotkey)
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
         payload = {
@@ -90,5 +119,6 @@ class AppConfig:
             "render": asdict(self.render),
             "tts": asdict(self.tts),
             "twitch": asdict(self.twitch),
+            "hotkey": asdict(self.hotkey),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
