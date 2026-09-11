@@ -10,7 +10,8 @@ Manifest format (model.json, lives next to the layer PNGs):
         "eyes":  {"order": 5, "open": "06Eyes_Open.png", "closed": "07Eyes_Closed.png"},
         "mouth": {"order": 6, "open": "09Mouth_Open.png", "closed": "10Mouth_Closed.png"}
       },
-      "sway_layers": ["16Ahoge.png"]
+      "sway_layers": ["16Ahoge.png"],
+      "bounce_react_layers": ["03Ear_Right.png", "12Ear_Left.png"]
     }
 
 `base_layers` is the z-order (back to front) of every layer that never changes at
@@ -26,6 +27,12 @@ idle sway animation (see rendering/overlay_window.py) — purely a procedural
 transform, no extra art needed. Defaults to an empty list (no sway) when
 absent, which is what auto-imported models get since we can't guess which
 part is meant to sway.
+
+`bounce_react_layers` (optional) names layers that should additionally
+rotate around their own attachment point when the avatar bounces (talking,
+or the idle bob) — e.g. ears: the edge nearest the head moves exactly with
+it, while the outer tip lags behind and eases into the rotation, instead of
+translating in rigid lockstep with everything else. Also defaults to empty.
 """
 from __future__ import annotations
 
@@ -48,6 +55,7 @@ class AvatarModel:
     states: dict[str, StateGroup]
     directory: Path
     sway_layers: list[str] = field(default_factory=list)
+    bounce_react_layers: list[str] = field(default_factory=list)
 
     def layer_path(self, filename: str) -> Path:
         return self.directory / filename
@@ -94,4 +102,5 @@ def load_model(directory: Path) -> AvatarModel:
         states=states,
         directory=directory,
         sway_layers=list(data.get("sway_layers", [])),
+        bounce_react_layers=list(data.get("bounce_react_layers", [])),
     )

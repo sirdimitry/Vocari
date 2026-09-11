@@ -27,5 +27,6 @@
       "closed": "10Mouth_Closed.png"
     }
   },
-  "sway_layers": ["16Ahoge.png"]
+  "sway_layers": ["16Ahoge.png"],
+  "bounce_react_layers": ["03Ear_Right.png", "12Ear_Left.png"]
 }

@@ -42,6 +42,15 @@ IDLE_BOB_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / IDLE_BOB_PERIOD_S
 # canvas's bottom edge (long hair, torso) can show a sliver of transparency
 # there if a streamer crops their OBS source tight to the avatar's bottom.
 
+# bounce_react_layers (e.g. ears): on top of the shared translation above,
+# these also rotate around their own attachment point, with the rotation
+# *lagging* behind the current bounce via exponential smoothing — the edge
+# at the pivot moves exactly with the body (zero lag, it's the anchor);
+# the far tip swings and visibly catches up a few frames later, instead of
+# translating in rigid lockstep with everything else.
+BOUNCE_REACT_DEG_PER_PX = 0.45  # target rotation per px of current bounce offset
+BOUNCE_REACT_LAG_COEFF = 0.25  # how much of the gap to target angle closes per tick (lower = laggier)
+
 ALPHA_THRESHOLD = 10
 
 
@@ -82,6 +91,22 @@ def _sway_pivot(pixmap: QPixmap) -> tuple[float, float] | None:
     return pivot_x, float(bottom_y)
 
 
+def _attachment_pivot(pixmap: QPixmap, canvas_center_x: float) -> tuple[float, float] | None:
+    """Where a bounce_react layer (e.g. an ear) is "attached": the opaque
+    pixels closest to the canvas's horizontal center — a generic proxy for
+    "the side facing the head", regardless of whether the layer sits on the
+    left or right. None if the layer is fully transparent."""
+    alpha = _to_alpha_array(pixmap)
+    if alpha is None:
+        return None
+    ys, xs = np.where(alpha > ALPHA_THRESHOLD)
+    if len(xs) == 0:
+        return None
+    distance_to_center = np.abs(xs.astype(np.float64) - canvas_center_x)
+    nearest = distance_to_center <= (distance_to_center.min() + 3)  # small tolerance band
+    return float(xs[nearest].mean()), float(ys[nearest].mean())
+
+
 class OverlayWindow(QWidget):
     def __init__(self, model: AvatarModel, config: OverlayConfig, render_config: RenderConfig):
         super().__init__()
@@ -120,6 +145,8 @@ class OverlayWindow(QWidget):
         self._idle_bob_phase = 0.0
         self._sway_layer_phase: dict[str, float] = {}
         self._sway_layer_pivot: dict[str, tuple[float, float]] = {}
+        self._bounce_react_pivot: dict[str, tuple[float, float]] = {}
+        self._bounce_react_angle: dict[str, float] = {}
         self._recompute_sway_layers()
 
         self._anim_timer = QTimer(self)
@@ -150,6 +177,16 @@ class OverlayWindow(QWidget):
             pivot = _sway_pivot(pixmap) if pixmap is not None else None
             if pivot is not None:
                 self._sway_layer_pivot[filename] = pivot
+
+        canvas_center_x = self.model.canvas_size[0] / 2
+        self._bounce_react_pivot = {}
+        self._bounce_react_angle = {}
+        for filename in self.model.bounce_react_layers:
+            pixmap = self._pixmaps.get(filename)
+            pivot = _attachment_pivot(pixmap, canvas_center_x) if pixmap is not None else None
+            if pivot is not None:
+                self._bounce_react_pivot[filename] = pivot
+                self._bounce_react_angle[filename] = 0.0
 
     def _load_pixmaps(self) -> dict[str, QPixmap]:
         pixmaps: dict[str, QPixmap] = {}
@@ -237,7 +274,25 @@ class OverlayWindow(QWidget):
     def _on_animation_tick(self) -> None:
         self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
         self._idle_bob_phase = (self._idle_bob_phase + IDLE_BOB_PHASE_STEP) % TWO_PI
+
+        if self._bounce_react_pivot:
+            target_angle = BOUNCE_REACT_DEG_PER_PX * self._current_bounce_offset()
+            for filename in self._bounce_react_pivot:
+                current = self._bounce_react_angle[filename]
+                self._bounce_react_angle[filename] = current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
+
         self.update()
+
+    def _current_bounce_offset(self) -> float:
+        if not self._sway_enabled:
+            return 0.0
+        # Subtle always-on idle bob (breathing-like) plus, on top of it, an
+        # upward hop scaled by how loud/sharp the current audio is while
+        # talking — not a fixed-rate oscillation.
+        offset = IDLE_BOB_AMPLITUDE_PX * math.sin(self._idle_bob_phase)
+        if self._bounce_level > 0.0:
+            offset += -self._bounce_level * BOUNCE_AMPLITUDE_PX
+        return offset
 
     # -- painting ---------------------------------------------------------
 
@@ -257,14 +312,7 @@ class OverlayWindow(QWidget):
             if self.width() and self.height():
                 painter.scale(self.width() / canvas_w, self.height() / canvas_h)
 
-            bounce_offset = 0.0
-            if self._sway_enabled:
-                # Subtle always-on idle bob (breathing-like) plus, on top of
-                # it, an upward hop scaled by how loud/sharp the current
-                # audio is while talking — not a fixed-rate oscillation.
-                bounce_offset = IDLE_BOB_AMPLITUDE_PX * math.sin(self._idle_bob_phase)
-                if self._bounce_level > 0.0:
-                    bounce_offset += -self._bounce_level * BOUNCE_AMPLITUDE_PX
+            bounce_offset = self._current_bounce_offset()
 
             for kind, ref in self._z_order:
                 pixmap = self._resolve_layer(kind, ref)
@@ -272,14 +320,22 @@ class OverlayWindow(QWidget):
                     continue
                 y_offset = bounce_offset
 
-                pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+                sway_pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+                react_pivot = self._bounce_react_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+                if sway_pivot is not None:
+                    angle = SWAY_ROTATION_DEG * math.sin(self._sway_phase + self._sway_layer_phase[ref])
+                elif react_pivot is not None:
+                    angle = self._bounce_react_angle[ref]
+                else:
+                    angle = None
+
+                pivot = sway_pivot if sway_pivot is not None else react_pivot
                 if pivot is not None:
                     # Rotate around (pivot_x, pivot_y) in the pixmap's own
                     # coordinates, then shift the whole result by y_offset —
                     # i.e. translate to the (bounce-shifted) pivot, rotate,
                     # then translate back by the *unshifted* pivot so the
                     # y_offset isn't applied twice.
-                    angle = SWAY_ROTATION_DEG * math.sin(self._sway_phase + self._sway_layer_phase[ref])
                     painter.save()
                     painter.translate(pivot[0], pivot[1] + y_offset)
                     painter.rotate(angle)
