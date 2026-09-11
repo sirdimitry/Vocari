@@ -40,6 +40,7 @@ class TTSConfig:
     auto_detect_language: bool = True
     manual_lang: str = "ru"  # used instead of detection when auto_detect_language is off
     max_chars: int = 200
+    random_voice: bool = False  # pick a random voice (see tts/voices.py) per utterance
 
 
 @dataclass

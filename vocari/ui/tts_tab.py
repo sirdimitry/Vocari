@@ -2,19 +2,14 @@
 detection mode, and the shared text length limit."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QFormLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
+from vocari.tts.voices import EN_VOICES, RU_VOICES
 from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
-
-# A short curated list of well-known edge-tts neural voices — the combo box
-# is editable, so any other voice id works too (see the hint label for how
-# to list the full set).
-RU_VOICES = ["ru-RU-SvetlanaNeural", "ru-RU-DmitryNeural"]
-EN_VOICES = ["en-US-JennyNeural", "en-US-GuyNeural", "en-US-AriaNeural"]
 
 
 class TTSTab(QWidget):
@@ -68,6 +63,26 @@ class TTSTab(QWidget):
         voices_hint.setWordWrap(True)
         voices_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(voices_hint)
+
+        random_row = QHBoxLayout()
+        random_row.addWidget(QLabel("Случайный голос на каждую фразу"))
+        random_row.addStretch()
+        self.random_voice_toggle = ToggleSwitch()
+        self.random_voice_toggle.setChecked(config.tts.random_voice)
+        self.random_voice_toggle.toggled.connect(self._on_random_voice_toggled)
+        random_row.addWidget(self.random_voice_toggle)
+        layout.addLayout(random_row)
+
+        random_hint = QLabel(
+            "Вместо голосов из полей выше каждый раз выбирается случайный из "
+            f"набора: RU — {', '.join(RU_VOICES)}; EN — {', '.join(EN_VOICES)}."
+        )
+        random_hint.setWordWrap(True)
+        random_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(random_hint)
+
+        self.voice_ru_combo.setEnabled(not config.tts.random_voice)
+        self.voice_en_combo.setEnabled(not config.tts.random_voice)
 
         auto_row = QFormLayout()
         self.auto_detect_toggle = ToggleSwitch()
@@ -123,3 +138,10 @@ class TTSTab(QWidget):
     def _on_manual_lang_changed(self, index: int) -> None:
         self.config.tts.manual_lang = self.manual_lang_combo.itemData(index)
         self.config.save()
+
+    def _on_random_voice_toggled(self, checked: bool) -> None:
+        self.config.tts.random_voice = checked
+        self.voice_ru_combo.setEnabled(not checked)
+        self.voice_en_combo.setEnabled(not checked)
+        self.config.save()
+        logger.info("Случайный голос: %s", "включено" if checked else "выключено")
