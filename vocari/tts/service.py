@@ -15,7 +15,7 @@ def pick_voice(text: str, config: TTSConfig, manual_lang: str | None = None) -> 
     elif config.auto_detect_language:
         lang = detect_language(text)
     else:
-        lang = "ru"
+        lang = config.manual_lang
     voice = config.voice_ru if lang == "ru" else config.voice_en
     return voice, lang
 

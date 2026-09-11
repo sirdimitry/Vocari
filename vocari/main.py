@@ -71,7 +71,13 @@ def main() -> None:
 
     log_window = LogWindow(log_file)
     settings_window = SettingsWindow(
-        config, on_model_imported, window.set_sway_enabled, tts_provider, audio_player
+        config,
+        on_model_imported,
+        window.set_sway_enabled,
+        window.set_position,
+        window.set_scale,
+        tts_provider,
+        audio_player,
     )
     tray = TrayController(window, app, log_window, settings_window)  # noqa: F841
 

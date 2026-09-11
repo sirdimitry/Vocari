@@ -138,6 +138,19 @@ class OverlayWindow(QWidget):
             max(1, round(height * self.config.scale)),
         )
 
+    def set_scale(self, scale: float) -> None:
+        """From Settings → Модель, as an alternative to the mouse wheel.
+        Caller is responsible for persisting AppConfig (this only holds the
+        OverlayConfig sub-section, not the full app config)."""
+        self.config.scale = max(MIN_SCALE, min(MAX_SCALE, scale))
+        self._apply_scale()
+
+    def set_position(self, x: int, y: int) -> None:
+        """From Settings → Модель, as an alternative to dragging the window.
+        Caller is responsible for persisting AppConfig."""
+        self.move(x, y)
+        self.sync_geometry_to_config()
+
     def set_active_frame(self, state_key: str, frame_name: str) -> None:
         if self._active_frame.get(state_key) != frame_name:
             self._active_frame[state_key] = frame_name

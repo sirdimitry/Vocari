@@ -38,7 +38,21 @@ class TTSConfig:
     rate_percent: int = 0  # edge-tts speaking-rate offset, e.g. -10 .. +50
     volume_percent: int = 0  # edge-tts volume offset, e.g. -50 .. +50
     auto_detect_language: bool = True
+    manual_lang: str = "ru"  # used instead of detection when auto_detect_language is off
     max_chars: int = 200
+
+
+@dataclass
+class TwitchConfig:
+    # Stage 4 only stores these; the bot itself connects in Stage 5.
+    channel: str = ""
+    oauth_token: str = ""
+    command_prefix: str = "!tts"
+    cooldown_seconds: int = 10
+    subs_only: bool = False
+    vip_only: bool = False
+    mods_only: bool = False
+    blacklist_words: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -46,6 +60,7 @@ class AppConfig:
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     render: RenderConfig = field(default_factory=RenderConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    twitch: TwitchConfig = field(default_factory=TwitchConfig)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
@@ -62,12 +77,14 @@ class AppConfig:
         overlay = OverlayConfig(**{**asdict(OverlayConfig()), **data.get("overlay", {})})
         render = RenderConfig(**{**asdict(RenderConfig()), **data.get("render", {})})
         tts = TTSConfig(**{**asdict(TTSConfig()), **data.get("tts", {})})
-        return cls(overlay=overlay, render=render, tts=tts)
+        twitch = TwitchConfig(**{**asdict(TwitchConfig()), **data.get("twitch", {})})
+        return cls(overlay=overlay, render=render, tts=tts, twitch=twitch)
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
         payload = {
             "overlay": asdict(self.overlay),
             "render": asdict(self.render),
             "tts": asdict(self.tts),
+            "twitch": asdict(self.twitch),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
