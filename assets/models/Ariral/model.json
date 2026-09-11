@@ -1,0 +1,31 @@
+{
+  "name": "Ariral",
+  "canvas": [1280, 1280],
+  "base_layers": [
+    "01HairBehind.png",
+    "02Body.png",
+    "03Ear_Right.png",
+    "04Hair_Right.png",
+    "05Head.png",
+    "08Brows.png",
+    "13Hair_Detail_Down.png",
+    "14Hair_Detail_Up.png",
+    "11Hair_Left.png",
+    "12Ear_Left.png",
+    "15HairFrontSmall.png",
+    "16Ahoge.png"
+  ],
+  "states": {
+    "eyes": {
+      "order": 5,
+      "open": "06Eyes_Open.png",
+      "closed": "07Eyes_Closed.png"
+    },
+    "mouth": {
+      "order": 6,
+      "open": "09Mouth_Open.png",
+      "closed": "10Mouth_Closed.png"
+    }
+  },
+  "sway_layers": ["16Ahoge.png"]
+}
