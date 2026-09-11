@@ -15,6 +15,12 @@ silero_cache/
 build/
 dist/
 
+# Installer: output .exe, the ~25 MB Microsoft redistributable it bundles
+# (re-downloadable, see README "Сборка установщика"), and install logs
+installer/output/
+installer/vc_redist.x64.exe
+installer/*.log
+
 # Editors / OS
 .vscode/
 .idea/
