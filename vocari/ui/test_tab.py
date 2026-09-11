@@ -2,9 +2,7 @@
 connected — the manual TTS check required by Stage 3."""
 from __future__ import annotations
 
-import asyncio
-
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
 from vocari.config.settings import AppConfig
@@ -13,30 +11,9 @@ from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
 from vocari.tts.registry import get_active_provider
 from vocari.tts.service import enforce_length_limit, pick_voice
+from vocari.tts.synthesis_worker import SynthesisWorker
 
 logger = get_logger("tts.test_tab")
-
-
-class _SynthesisWorker(QObject):
-    finished = Signal(bytes, str)  # audio bytes, error message ("" on success)
-
-    def __init__(self, provider: TTSProvider, text: str, voice: str, lang: str, rate: str):
-        super().__init__()
-        self.provider = provider
-        self.text = text
-        self.voice = voice
-        self.lang = lang
-        self.rate = rate
-
-    def run(self) -> None:
-        try:
-            # EdgeTTSProvider-specific `rate` kwarg — fine while it's the only
-            # provider; a second provider will need this call made generic.
-            result = asyncio.run(self.provider.synthesize(self.text, self.voice, self.lang, rate=self.rate))
-            self.finished.emit(result.audio, "")
-        except Exception as exc:  # noqa: BLE001 - surface any provider/network error to the UI
-            logger.exception("Ошибка синтеза TTS")
-            self.finished.emit(b"", str(exc))
 
 
 class TestTab(QWidget):
@@ -46,7 +23,7 @@ class TestTab(QWidget):
         self.providers = providers
         self.audio_player = audio_player
         self._thread: QThread | None = None
-        self._worker: _SynthesisWorker | None = None
+        self._worker: SynthesisWorker | None = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Введите текст и нажмите «Озвучить», чтобы проверить TTS без чата:"))
@@ -84,7 +61,7 @@ class TestTab(QWidget):
         logger.info("Тест TTS: '%s' provider=%s voice=%s lang=%s", text, self.config.tts.provider, voice, lang)
 
         self._thread = QThread(self)
-        self._worker = _SynthesisWorker(provider, text, voice, lang, rate)
+        self._worker = SynthesisWorker(provider, text, voice, lang, rate)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_synthesis_finished)

@@ -19,17 +19,27 @@ from PySide6.QtWidgets import (
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
+from vocari.twitch.bot_controller import TwitchBotController
 from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
 
 TOKEN_GENERATOR_URL = "https://twitchapps.com/tmi/"
 
+STATUS_TEXT = {
+    "connecting": ("Подключение…", "gray"),
+    "connected": ("Подключено", "#2ecc71"),
+    "disconnected": ("Не подключено", "gray"),
+    "error": ("Ошибка", "#ff5c5c"),
+}
+
 
 class TwitchTab(QWidget):
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, bot_controller: TwitchBotController):
         super().__init__()
         self.config = config
+        self.bot_controller = bot_controller
+        self.bot_controller.status_changed.connect(self._on_status_changed)
 
         layout = QVBoxLayout(self)
 
@@ -95,13 +105,15 @@ class TwitchTab(QWidget):
         privacy_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(privacy_hint)
 
-        stage_hint = QLabel(
-            "Само подключение к чату и проверка токена появятся на Этапе 5 — "
-            "сейчас вкладка только сохраняет введённые данные."
-        )
-        stage_hint.setWordWrap(True)
-        stage_hint.setStyleSheet("color: gray; font-size: 11px; font-style: italic;")
-        layout.addWidget(stage_hint)
+        connection_row = QHBoxLayout()
+        self.connect_button = QPushButton("Подключиться к чату")
+        self.connect_button.clicked.connect(self._on_connect_clicked)
+        connection_row.addWidget(self.connect_button)
+        self.connection_status_label = QLabel("Не подключено")
+        self.connection_status_label.setStyleSheet("color: gray;")
+        connection_row.addWidget(self.connection_status_label)
+        connection_row.addStretch()
+        layout.addLayout(connection_row)
 
         access_label = QLabel("Кому разрешено пользоваться командой")
         access_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
@@ -159,6 +171,28 @@ class TwitchTab(QWidget):
     def _open_token_page(self) -> None:
         logger.info("Открываю страницу получения Twitch-токена в браузере")
         QDesktopServices.openUrl(QUrl(TOKEN_GENERATOR_URL))
+
+    def _on_connect_clicked(self) -> None:
+        if self.bot_controller.is_running():
+            self.bot_controller.stop()
+            return
+        self._save()  # so the bot uses whatever is currently typed, not a stale save
+        if not self.config.twitch.channel or not self.config.twitch.oauth_token:
+            self.connection_status_label.setStyleSheet("color:#ff5c5c;")
+            self.connection_status_label.setText("Укажите канал и токен")
+            return
+        self.bot_controller.start()
+
+    def _on_status_changed(self, state: str, detail: str) -> None:
+        text, color = STATUS_TEXT.get(state, (state, "gray"))
+        if state == "connected" and detail:
+            text = f"{text}: {detail}"
+        elif state == "error" and detail:
+            text = f"{text}: {detail}"
+        self.connection_status_label.setStyleSheet(f"color:{color};")
+        self.connection_status_label.setText(text)
+        self.connect_button.setText("Отключиться" if state in ("connecting", "connected") else "Подключиться к чату")
+        logger.info("Twitch: статус подключения — %s %s", state, detail)
 
     def _on_show_token_toggled(self, checked: bool) -> None:
         self.token_edit.setEchoMode(

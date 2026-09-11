@@ -12,6 +12,7 @@ from vocari.config.settings import AppConfig
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
 from vocari.tts.silero_provider import SileroTTSProvider
+from vocari.twitch.bot_controller import TwitchBotController
 from vocari.ui.model_tab import ModelTab
 from vocari.ui.render_tab import RenderTab
 from vocari.ui.silero_tab import SileroTab
@@ -30,6 +31,7 @@ class SettingsWindow(QWidget):
         on_scale_changed: Callable[[float], None],
         tts_providers: dict[str, TTSProvider],
         audio_player: AudioPlayer,
+        twitch_bot_controller: TwitchBotController,
     ):
         super().__init__()
         self.config = config
@@ -45,7 +47,7 @@ class SettingsWindow(QWidget):
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
         tabs.addTab(SileroTab(silero_provider), "Silero")
-        tabs.addTab(TwitchTab(config), "Twitch")
+        tabs.addTab(TwitchTab(config, twitch_bot_controller), "Twitch")
         tabs.addTab(TestTab(config, tts_providers, audio_player), "Тест")
 
         layout = QVBoxLayout(self)

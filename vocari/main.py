@@ -8,13 +8,18 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from vocari.__version__ import __version__
+from vocari.chat.base import ChatMessage
+from vocari.chat.filters import CooldownTracker, extract_command_text, find_blacklisted_word, has_access
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger, setup_logging
 from vocari.rendering.model import load_model
 from vocari.rendering.overlay_window import OverlayWindow
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.edge_provider import EdgeTTSProvider
+from vocari.tts.service import enforce_length_limit
 from vocari.tts.silero_provider import SileroTTSProvider
+from vocari.tts.tts_queue import TTSQueue
+from vocari.twitch.bot_controller import TwitchBotController
 from vocari.ui.log_window import LogWindow
 from vocari.ui.settings_window import SettingsWindow
 from vocari.ui.tray_icon import TrayController
@@ -70,6 +75,33 @@ def main() -> None:
         on_audio_level=window.set_bounce_level,
     )
 
+    tts_queue = TTSQueue(config, tts_providers, audio_player)
+
+    twitch_bot = TwitchBotController(config.twitch)
+    cooldown_tracker = CooldownTracker()
+
+    def on_chat_message(message: ChatMessage) -> None:
+        command_text = extract_command_text(message.text, config.twitch.command_prefix)
+        if not command_text:
+            return
+        if not has_access(message, config.twitch):
+            logger.info("Twitch: %s — нет доступа к команде (фильтр подписки/VIP/модератора)", message.display_name)
+            return
+        if not cooldown_tracker.check_and_record(message.username, config.twitch.cooldown_seconds):
+            logger.info("Twitch: %s — кулдаун", message.display_name)
+            return
+        blocked_word = find_blacklisted_word(command_text, config.twitch.blacklist_words)
+        if blocked_word:
+            logger.info("Twitch: %s — заблокировано слово '%s'", message.display_name, blocked_word)
+            return
+        text, truncated = enforce_length_limit(command_text, config.tts)
+        logger.info(
+            "Twitch !tts от %s: '%s'%s", message.display_name, text, " (обрезано)" if truncated else ""
+        )
+        tts_queue.enqueue(text)
+
+    twitch_bot.message_received.connect(on_chat_message)
+
     log_window = LogWindow(log_file)
     settings_window = SettingsWindow(
         config,
@@ -79,11 +111,13 @@ def main() -> None:
         window.set_scale,
         tts_providers,
         audio_player,
+        twitch_bot,
     )
     tray = TrayController(window, app, log_window, settings_window)  # noqa: F841
 
     def on_quit() -> None:
         logger.info("Vocari завершает работу")
+        twitch_bot.stop()
         audio_player.stop()
         window.sync_geometry_to_config()
         config.save()

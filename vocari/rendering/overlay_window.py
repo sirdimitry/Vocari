@@ -37,11 +37,10 @@ BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
 IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle whole-avatar breathing-like bob, always on
 IDLE_BOB_PERIOD_S = 2.4
 IDLE_BOB_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / IDLE_BOB_PERIOD_S
-BOTTOM_EDGE_CHECK_ROWS = 4  # a layer with opaque pixels this close to the
-# canvas bottom is treated as "flush with the frame" (e.g. a torso/long hair
-# cropped by the canvas edge, no art below it) and excluded from the bounce —
-# otherwise moving it up would tear it away from the window's bottom edge and
-# leave a transparent gap where a streamer framed the source flush at the bottom.
+# Bounce/bob move every layer together (body, head, hair, ears — the whole
+# figure), by user request, even though that means a layer flush with the
+# canvas's bottom edge (long hair, torso) can show a sliver of transparency
+# there if a streamer crops their OBS source tight to the avatar's bottom.
 
 ALPHA_THRESHOLD = 10
 
@@ -62,13 +61,6 @@ def _to_alpha_array(pixmap: QPixmap) -> np.ndarray | None:
     # buffer `arr` views into — without a copy the caller gets a dangling
     # pointer (crashes with an access violation, not a Python exception).
     return arr[:, : width * 4].reshape(height, width, 4)[:, :, 3].copy()  # ARGB32 is B,G,R,A in memory
-
-
-def _touches_bottom_edge(pixmap: QPixmap, rows: int = BOTTOM_EDGE_CHECK_ROWS) -> bool:
-    alpha = _to_alpha_array(pixmap)
-    if alpha is None:
-        return False
-    return bool((alpha[max(0, alpha.shape[0] - rows) :, :] > ALPHA_THRESHOLD).any())
 
 
 def _sway_pivot(pixmap: QPixmap) -> tuple[float, float] | None:
@@ -99,7 +91,6 @@ class OverlayWindow(QWidget):
 
         self._z_order = model.build_z_order()
         self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
-        self._bottom_anchored: set[str] = self._compute_bottom_anchored()
         # Stage 1 default state: eyes open, mouth closed (per spec).
         self._active_frame: dict[str, str] = {"eyes": "open", "mouth": "closed"}
         self._drag_offset: QPoint | None = None
@@ -141,7 +132,6 @@ class OverlayWindow(QWidget):
         self.model = model
         self._z_order = model.build_z_order()
         self._pixmaps = self._load_pixmaps()
-        self._bottom_anchored = self._compute_bottom_anchored()
         self._active_frame = {"eyes": "open", "mouth": "closed"}
         self._apply_scale()
         self.setWindowTitle(f"Vocari - {model.name}")
@@ -166,12 +156,6 @@ class OverlayWindow(QWidget):
         for filename in self.model.all_filenames():
             pixmaps[filename] = QPixmap(str(self.model.layer_path(filename)))
         return pixmaps
-
-    def _compute_bottom_anchored(self) -> set[str]:
-        anchored = {fn for fn, pm in self._pixmaps.items() if _touches_bottom_edge(pm)}
-        if anchored:
-            logger.debug("Слои у нижнего края холста (не участвуют в подпрыгивании): %s", ", ".join(sorted(anchored)))
-        return anchored
 
     def _apply_scale(self) -> None:
         width, height = self.model.canvas_size
@@ -283,10 +267,10 @@ class OverlayWindow(QWidget):
                     bounce_offset += -self._bounce_level * BOUNCE_AMPLITUDE_PX
 
             for kind, ref in self._z_order:
-                pixmap, filename = self._resolve_layer(kind, ref)
+                pixmap = self._resolve_layer(kind, ref)
                 if pixmap is None or pixmap.isNull():
                     continue
-                y_offset = 0.0 if filename in self._bottom_anchored else bounce_offset
+                y_offset = bounce_offset
 
                 pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
                 if pivot is not None:
@@ -307,13 +291,13 @@ class OverlayWindow(QWidget):
         finally:
             painter.end()
 
-    def _resolve_layer(self, kind: str, ref: str) -> tuple[QPixmap | None, str | None]:
+    def _resolve_layer(self, kind: str, ref: str) -> QPixmap | None:
         if kind == "layer":
-            return self._pixmaps.get(ref), ref
+            return self._pixmaps.get(ref)
         group = self.model.states[ref]
         frame_name = self._active_frame.get(ref, next(iter(group.frames)))
         filename = group.frames.get(frame_name)
-        return (self._pixmaps.get(filename) if filename else None), filename
+        return self._pixmaps.get(filename) if filename else None
 
     # -- drag to move -------------------------------------------------------
 
