@@ -39,7 +39,7 @@ class RenderTab(QWidget):
         layout.addWidget(gpu_note)
 
         sway_row = QHBoxLayout()
-        sway_row.addWidget(QLabel("Покачивание (ахоге + лёгкий подпрыг при речи)"))
+        sway_row.addWidget(QLabel("Покачивание (ахоге + фон + подпрыг при речи)"))
         sway_row.addStretch()
         self.sway_toggle = ToggleSwitch()
         self.sway_toggle.setChecked(config.render.enable_sway)
@@ -48,7 +48,9 @@ class RenderTab(QWidget):
         layout.addLayout(sway_row)
 
         sway_note = QLabel(
-            "Подпрыгивание тела во время речи реагирует на громкость звука "
+            "Ахоге покачивается дугой от основания, как настоящая прядь; аватар "
+            "всегда слегка покачивается вверх-вниз в простое; во время речи сверху "
+            "добавляется подпрыгивание, реагирующее на громкость звука "
             "(громче/резче звук — резче скачок), а не просто качается по таймеру."
         )
         sway_note.setWordWrap(True)

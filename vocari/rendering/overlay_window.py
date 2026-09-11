@@ -23,37 +23,71 @@ BLINK_MIN_INTERVAL_MS = 2000
 BLINK_MAX_INTERVAL_MS = 6000
 BLINK_CLOSED_DURATION_MS = 150
 
-# Procedural idle sway (e.g. the ahoge) — no extra art needed, just a small
-# per-frame offset — plus an audio-reactive talk bounce driven by whatever
-# level AudioPlayer reports (see set_bounce_level): louder/sharper audio
-# pushes the whole avatar further, quiet passages let it settle back down.
-# Both are gated by the "Покачивание" toggle in settings.
+# Procedural idle sway (e.g. the ahoge, swinging like a real strand of hair
+# from where it's rooted) — no extra art needed — plus an audio-reactive talk
+# bounce driven by whatever level AudioPlayer reports (see set_bounce_level):
+# louder/sharper audio pushes the whole avatar further, quiet passages let it
+# settle back down. Both are gated by the "Покачивание" toggle in settings.
 ANIMATION_INTERVAL_MS = 33  # ~30 FPS, matches the spec's render timer cap
 TWO_PI = 2 * math.pi
-SWAY_AMPLITUDE_PX = 6.0
-SWAY_PERIOD_S = 2.6
+SWAY_ROTATION_DEG = 11.0
+SWAY_PERIOD_S = 1.8
 SWAY_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / SWAY_PERIOD_S
 BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
+IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle whole-avatar breathing-like bob, always on
+IDLE_BOB_PERIOD_S = 2.4
+IDLE_BOB_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / IDLE_BOB_PERIOD_S
 BOTTOM_EDGE_CHECK_ROWS = 4  # a layer with opaque pixels this close to the
 # canvas bottom is treated as "flush with the frame" (e.g. a torso/long hair
 # cropped by the canvas edge, no art below it) and excluded from the bounce —
 # otherwise moving it up would tear it away from the window's bottom edge and
 # leave a transparent gap where a streamer framed the source flush at the bottom.
 
+ALPHA_THRESHOLD = 10
 
-def _touches_bottom_edge(pixmap: QPixmap, rows: int = BOTTOM_EDGE_CHECK_ROWS) -> bool:
+
+def _to_alpha_array(pixmap: QPixmap) -> np.ndarray | None:
+    """Alpha channel of `pixmap` as a (height, width) uint8 array, or None
+    for an empty/null pixmap."""
     if pixmap.isNull():
-        return False
+        return None
     image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     width, height = image.width(), image.height()
     if width == 0 or height == 0:
-        return False
+        return None
     buffer = image.constBits()
     stride = image.bytesPerLine()
     arr = np.frombuffer(buffer, dtype=np.uint8, count=stride * height).reshape(height, stride)
-    arr = arr[:, : width * 4].reshape(height, width, 4)
-    bottom_rows = arr[max(0, height - rows) :, :, 3]  # alpha channel (ARGB32 is B,G,R,A in memory)
-    return bool((bottom_rows > 10).any())
+    # .copy(): `image` is local and goes out of scope on return, freeing the
+    # buffer `arr` views into — without a copy the caller gets a dangling
+    # pointer (crashes with an access violation, not a Python exception).
+    return arr[:, : width * 4].reshape(height, width, 4)[:, :, 3].copy()  # ARGB32 is B,G,R,A in memory
+
+
+def _touches_bottom_edge(pixmap: QPixmap, rows: int = BOTTOM_EDGE_CHECK_ROWS) -> bool:
+    alpha = _to_alpha_array(pixmap)
+    if alpha is None:
+        return False
+    return bool((alpha[max(0, alpha.shape[0] - rows) :, :] > ALPHA_THRESHOLD).any())
+
+
+def _sway_pivot(pixmap: QPixmap) -> tuple[float, float] | None:
+    """Where a sway layer is "rooted" so it can rotate from there instead of
+    just translating — e.g. the ahoge should swing from the point where it
+    meets the scalp, not slide up and down as a rigid block. Approximated as
+    the horizontal center of its opaque pixels at their lowest row (works for
+    anything that sticks up/out from a base, like hair strands or antennae);
+    None if the layer is fully transparent."""
+    alpha = _to_alpha_array(pixmap)
+    if alpha is None:
+        return None
+    ys, xs = np.where(alpha > ALPHA_THRESHOLD)
+    if len(ys) == 0:
+        return None
+    bottom_y = int(ys.max())
+    xs_at_bottom = xs[ys == bottom_y]
+    pivot_x = float(xs_at_bottom.mean())
+    return pivot_x, float(bottom_y)
 
 
 class OverlayWindow(QWidget):
@@ -92,7 +126,9 @@ class OverlayWindow(QWidget):
         self._talking = False
         self._bounce_level = 0.0  # 0..1, driven by AudioPlayer via set_bounce_level()
         self._sway_phase = 0.0
+        self._idle_bob_phase = 0.0
         self._sway_layer_phase: dict[str, float] = {}
+        self._sway_layer_pivot: dict[str, tuple[float, float]] = {}
         self._recompute_sway_layers()
 
         self._anim_timer = QTimer(self)
@@ -118,6 +154,12 @@ class OverlayWindow(QWidget):
         self._sway_layer_phase = {
             filename: index * 0.9 for index, filename in enumerate(self.model.sway_layers)
         }
+        self._sway_layer_pivot = {}
+        for filename in self.model.sway_layers:
+            pixmap = self._pixmaps.get(filename)
+            pivot = _sway_pivot(pixmap) if pixmap is not None else None
+            if pivot is not None:
+                self._sway_layer_pivot[filename] = pivot
 
     def _load_pixmaps(self) -> dict[str, QPixmap]:
         pixmaps: dict[str, QPixmap] = {}
@@ -196,7 +238,9 @@ class OverlayWindow(QWidget):
         self.update()
 
     def _animation_active(self) -> bool:
-        return self._sway_enabled and bool(self._sway_layer_phase)
+        # The idle bob runs for any model whenever sway is enabled, not just
+        # ones with rotating sway_layers like the ahoge.
+        return self._sway_enabled
 
     def _update_animation_timer(self) -> None:
         should_run = self._animation_active()
@@ -208,6 +252,7 @@ class OverlayWindow(QWidget):
 
     def _on_animation_tick(self) -> None:
         self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
+        self._idle_bob_phase = (self._idle_bob_phase + IDLE_BOB_PHASE_STEP) % TWO_PI
         self.update()
 
     # -- painting ---------------------------------------------------------
@@ -229,19 +274,36 @@ class OverlayWindow(QWidget):
                 painter.scale(self.width() / canvas_w, self.height() / canvas_h)
 
             bounce_offset = 0.0
-            if self._sway_enabled and self._bounce_level > 0.0:
-                # Negative = upward hop, scaled by how loud/sharp the current
-                # audio is — not a fixed-rate oscillation.
-                bounce_offset = -self._bounce_level * BOUNCE_AMPLITUDE_PX
+            if self._sway_enabled:
+                # Subtle always-on idle bob (breathing-like) plus, on top of
+                # it, an upward hop scaled by how loud/sharp the current
+                # audio is while talking — not a fixed-rate oscillation.
+                bounce_offset = IDLE_BOB_AMPLITUDE_PX * math.sin(self._idle_bob_phase)
+                if self._bounce_level > 0.0:
+                    bounce_offset += -self._bounce_level * BOUNCE_AMPLITUDE_PX
 
             for kind, ref in self._z_order:
                 pixmap, filename = self._resolve_layer(kind, ref)
                 if pixmap is None or pixmap.isNull():
                     continue
                 y_offset = 0.0 if filename in self._bottom_anchored else bounce_offset
-                if self._sway_enabled and kind == "layer" and ref in self._sway_layer_phase:
-                    y_offset += SWAY_AMPLITUDE_PX * math.sin(self._sway_phase + self._sway_layer_phase[ref])
-                painter.drawPixmap(0, round(y_offset), pixmap)
+
+                pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+                if pivot is not None:
+                    # Rotate around (pivot_x, pivot_y) in the pixmap's own
+                    # coordinates, then shift the whole result by y_offset —
+                    # i.e. translate to the (bounce-shifted) pivot, rotate,
+                    # then translate back by the *unshifted* pivot so the
+                    # y_offset isn't applied twice.
+                    angle = SWAY_ROTATION_DEG * math.sin(self._sway_phase + self._sway_layer_phase[ref])
+                    painter.save()
+                    painter.translate(pivot[0], pivot[1] + y_offset)
+                    painter.rotate(angle)
+                    painter.translate(-pivot[0], -pivot[1])
+                    painter.drawPixmap(0, 0, pixmap)
+                    painter.restore()
+                else:
+                    painter.drawPixmap(0, round(y_offset), pixmap)
         finally:
             painter.end()
 
