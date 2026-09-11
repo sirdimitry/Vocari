@@ -14,6 +14,7 @@ from vocari.rendering.model import load_model
 from vocari.rendering.overlay_window import OverlayWindow
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.edge_provider import EdgeTTSProvider
+from vocari.tts.silero_provider import SileroTTSProvider
 from vocari.ui.log_window import LogWindow
 from vocari.ui.settings_window import SettingsWindow
 from vocari.ui.tray_icon import TrayController
@@ -62,7 +63,7 @@ def main() -> None:
         window.set_model(new_model)
         logger.info("Оверлей обновлён: модель '%s'", new_model.name)
 
-    tts_provider = EdgeTTSProvider()
+    tts_providers = {"edge": EdgeTTSProvider(), "silero": SileroTTSProvider()}
     audio_player = AudioPlayer(
         on_mouth_state=lambda is_open: window.set_active_frame("mouth", "open" if is_open else "closed"),
         on_talking=window.set_talking,
@@ -76,7 +77,7 @@ def main() -> None:
         window.set_sway_enabled,
         window.set_position,
         window.set_scale,
-        tts_provider,
+        tts_providers,
         audio_player,
     )
     tray = TrayController(window, app, log_window, settings_window)  # noqa: F841

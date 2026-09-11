@@ -11,6 +11,7 @@ from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
+from vocari.tts.registry import get_active_provider
 from vocari.tts.service import enforce_length_limit, pick_voice
 
 logger = get_logger("tts.test_tab")
@@ -39,10 +40,10 @@ class _SynthesisWorker(QObject):
 
 
 class TestTab(QWidget):
-    def __init__(self, config: AppConfig, provider: TTSProvider, audio_player: AudioPlayer):
+    def __init__(self, config: AppConfig, providers: dict[str, TTSProvider], audio_player: AudioPlayer):
         super().__init__()
         self.config = config
-        self.provider = provider
+        self.providers = providers
         self.audio_player = audio_player
         self._thread: QThread | None = None
         self._worker: _SynthesisWorker | None = None
@@ -72,17 +73,18 @@ class TestTab(QWidget):
         text, truncated = enforce_length_limit(text, self.config.tts)
         voice, lang = pick_voice(text, self.config.tts)
         rate = f"{self.config.tts.rate_percent:+d}%"
+        provider = get_active_provider(self.config.tts, self.providers)
 
         self.speak_button.setEnabled(False)
         self.status_label.setStyleSheet("color: gray;")
-        message = f"Синтез… (голос {voice})"
+        message = f"Синтез… ({self.config.tts.provider}, голос {voice})"
         if truncated:
             message += f" — текст обрезан до {self.config.tts.max_chars} символов"
         self.status_label.setText(message)
-        logger.info("Тест TTS: '%s' voice=%s lang=%s", text, voice, lang)
+        logger.info("Тест TTS: '%s' provider=%s voice=%s lang=%s", text, self.config.tts.provider, voice, lang)
 
         self._thread = QThread(self)
-        self._worker = _SynthesisWorker(self.provider, text, voice, lang, rate)
+        self._worker = _SynthesisWorker(provider, text, voice, lang, rate)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_synthesis_finished)

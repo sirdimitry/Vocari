@@ -33,14 +33,17 @@ class RenderConfig:
 
 @dataclass
 class TTSConfig:
-    voice_ru: str = "ru-RU-SvetlanaNeural"
-    voice_en: str = "en-US-JennyNeural"
-    rate_percent: int = 0  # edge-tts speaking-rate offset, e.g. -10 .. +50
-    volume_percent: int = 0  # edge-tts volume offset, e.g. -50 .. +50
+    provider: str = "edge"  # "edge" (cloud, free, no setup) | "silero" (local/offline)
+    voice_ru: str = "ru-RU-SvetlanaNeural"  # edge-tts voice
+    voice_en: str = "en-US-JennyNeural"  # edge-tts voice
+    silero_voice_ru: str = "baya"
+    silero_voice_en: str = "en_0"
+    rate_percent: int = 0  # edge-tts speaking-rate offset, e.g. -10 .. +50 (Silero ignores this)
+    volume_percent: int = 0  # playback volume offset, e.g. -50 .. +50 (applies to any provider)
     auto_detect_language: bool = True
     manual_lang: str = "ru"  # used instead of detection when auto_detect_language is off
     max_chars: int = 200
-    random_voice: bool = False  # pick a random voice (see tts/voices.py) per utterance
+    random_voice: bool = False  # pick a random voice (see tts/voices.py) per utterance, for whichever provider is selected
 
 
 @dataclass

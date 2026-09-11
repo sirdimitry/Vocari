@@ -4,3 +4,11 @@ edge-tts>=6.1
 sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.26
+omegaconf>=2.3
+
+# torch (for the Silero TTS provider) is intentionally NOT listed here — a
+# plain `pip install torch` pulls a large CUDA-bundled build by default on
+# Windows even on machines with no NVIDIA GPU at all. Install the CPU-only
+# build explicitly instead (works identically regardless of GPU vendor):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# See README "Установка" for the full command.
