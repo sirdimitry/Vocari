@@ -89,6 +89,7 @@ class BubbleTab(QWidget):
 
         root = QVBoxLayout(self)
         root.addWidget(self._build_test_group())
+        root.addWidget(self._build_announce_group())
 
         columns = QHBoxLayout()
         columns.setSpacing(16)
@@ -143,6 +144,37 @@ class BubbleTab(QWidget):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
+        return box
+
+    def _build_announce_group(self) -> QGroupBox:
+        box = QGroupBox("Озвучка ника")
+        layout = QVBoxLayout(box)
+
+        self.announce_check = QCheckBox("Озвучивать ник перед сообщением")
+        self.announce_check.setChecked(self.config.bubble.announce_nick)
+        self.announce_check.toggled.connect(self._on_announce_toggled)
+        layout.addWidget(self.announce_check)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.announce_phrase = QLineEdit(self.config.bubble.announce_phrase)
+        self.announce_phrase.setEnabled(self.config.bubble.announce_nick)
+        self.announce_phrase.editingFinished.connect(self._on_announce_phrase_changed)
+        form.addRow("Фраза:", self.announce_phrase)
+        layout.addLayout(form)
+
+        announce_hint = QLabel(
+            "Слово «Ник» в фразе заменяется на настоящее имя отправителя — "
+            "например, «Ник прислал сообщение» прозвучит как «sirdimitry "
+            "прислал сообщение». Формулировку можно поменять полностью, "
+            "главное — оставить в ней слово «Ник» там, где должно звучать "
+            "имя (или убрать его, если имя вообще не нужно озвучивать). "
+            "Само сообщение из бабл-подложки не меняется — ник в ней и так "
+            "написан отдельно."
+        )
+        announce_hint.setWordWrap(True)
+        announce_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(announce_hint)
         return box
 
     def _build_look_group(self) -> QGroupBox:
@@ -380,6 +412,16 @@ class BubbleTab(QWidget):
     def _on_enabled_toggled(self, checked: bool) -> None:
         self._set("enabled", checked)
         logger.info("Облачко с текстом: %s", "включено" if checked else "выключено")
+
+    def _on_announce_toggled(self, checked: bool) -> None:
+        self._set("announce_nick", checked)
+        self.announce_phrase.setEnabled(checked)
+        logger.info("Озвучка ника: %s", "включена" if checked else "выключена")
+
+    def _on_announce_phrase_changed(self) -> None:
+        phrase = self.announce_phrase.text().strip() or self.config.bubble.announce_phrase
+        self.announce_phrase.setText(phrase)
+        self._set("announce_phrase", phrase)
 
     def _on_style_changed(self) -> None:
         self._set("style", self.style_combo.currentData())

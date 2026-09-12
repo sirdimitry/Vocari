@@ -120,6 +120,15 @@ class BubbleConfig:
     nick_stroke_color: str = "#a8000000"
     nick_stroke_width: int = 3
 
+    # Speaks the sender's name before the message itself — a separate
+    # synthesis pass isn't needed, the phrase is just prepended to the text
+    # that gets sent to TTS (see tts/tts_queue.py); the bubble's own text
+    # stays just the message, since the nickname is already shown there
+    # separately. "Ник" in the phrase is replaced with the actual sender
+    # name; leave it out to speak a fixed phrase with no name at all.
+    announce_nick: bool = False
+    announce_phrase: str = "Ник прислал сообщение"
+
 
 @dataclass
 class HotkeyConfig:

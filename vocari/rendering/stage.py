@@ -25,6 +25,15 @@ from typing import Callable
 # slot 0 and everybody behind shuffles one step forward, so the only gap on
 # stage is ever the fixed one at slot 1.
 SPEAKER_SLOT = 0
+# An exiting instance's numbered slot is reassigned to this the moment it
+# starts leaving (see Stage.retire) so it stops aliasing SPEAKER_SLOT once
+# the next waiter is promoted into it — otherwise two instances both read as
+# "in slot 0" at once (one leaving, one now speaking), which used to confuse
+# the *next* retire()'s bookkeeping into promoting a third waiter on top of
+# them while the first was still on screen. slot_scale()/_paint_instance
+# still draw it at full size (same as SPEAKER_SLOT) since <= SPEAKER_SLOT
+# covers this too.
+EXIT_SLOT = -1
 FIRST_WAITING_SLOT = 2
 MAX_WAITING = 6  # + the speaker = 7 avatars visible at once, per spec
 LAST_SLOT = FIRST_WAITING_SLOT + MAX_WAITING - 1
@@ -277,12 +286,26 @@ class Stage:
         inst = self.get(instance_id)
         if inst is None:
             return
+        was_speaker = inst.slot == SPEAKER_SLOT
+        self._occupied_slots.discard(inst.slot)
         inst.mirrored = not self._base_mirrored
         inst.phase = "exiting"
         inst.target_x_offset = self._exit_x_offset
+        # Give up the numbered slot immediately, not just the phase change —
+        # otherwise this instance keeps reading as "in slot 0" for the whole
+        # (multi-tick) exit animation, and the *next* retire() (once the
+        # newly-promoted speaker finishes) would see slot 0 "occupied" by
+        # this already-leaving instance and refuse to promote, or — worse,
+        # since occupied_slots itself gets discarded/re-added correctly but
+        # nothing stops a second, third, ... promotion from also landing on
+        # slot 0 while this one is still visibly mid-exit — pile multiple
+        # instances on top of each other all reading as "the speaker" at
+        # once, each stomping the others' synthesis/playback (there's only
+        # one AudioPlayer). See the regression this fixed: rapid-fire test
+        # clicks leaving several avatars overlapping and silent.
+        inst.slot = EXIT_SLOT
 
-        if inst.slot == SPEAKER_SLOT:
-            self._occupied_slots.discard(SPEAKER_SLOT)
+        if was_speaker:
             self._promote_next()
             if self._on_slot_freed:
                 self._on_slot_freed()

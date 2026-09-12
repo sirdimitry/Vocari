@@ -17,6 +17,7 @@ from PySide6.QtCore import QObject, QThread, QTimer
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering.overlay_window import OverlayWindow
+from vocari.rendering.stage import AvatarInstance
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
 from vocari.tts.registry import get_active_provider
@@ -125,12 +126,27 @@ class TTSQueue(QObject):
             logger.exception("TTS-очередь: не удалось запустить синтез (id=%d)", instance_id)
             self.window.retire_speaker(instance_id)
 
+    def _spoken_text(self, inst: AvatarInstance) -> str:
+        """The text actually sent to TTS — the bubble's own text (inst.text)
+        stays just the message, since the sender's name is already shown
+        there separately; the announcement is audio-only, so it's prepended
+        here instead of touching what gets displayed."""
+        config = self.config.bubble
+        if not config.announce_nick or not inst.author:
+            return inst.text
+        phrase = config.announce_phrase.replace("Ник", inst.author).strip()
+        return f"{phrase}. {inst.text}" if phrase else inst.text
+
     def _start_synthesis(self, instance_id: int) -> None:
         inst = self.window.stage.get(instance_id)
         if inst is None:
             return
-        text = inst.text
-        voice, lang = pick_voice(text, self.config.tts)
+        # Voice/language are picked from the message alone — the announce
+        # phrase is a fixed, separately-authored string, so letting it sway
+        # auto-detection (especially against a short message) would be more
+        # likely to pick the wrong language than to help.
+        voice, lang = pick_voice(inst.text, self.config.tts)
+        text = self._spoken_text(inst)
         rate = f"{self.config.tts.rate_percent:+d}%"
         provider = get_active_provider(self.config.tts, self.providers)
         logger.info("TTS-очередь: синтез '%s' provider=%s voice=%s", text, self.config.tts.provider, voice)
