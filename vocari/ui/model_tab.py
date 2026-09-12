@@ -8,7 +8,6 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -28,7 +27,7 @@ from vocari.paths import app_root
 from vocari.rendering.model import AvatarModel
 from vocari.rendering.model_import import import_model_from_folder
 from vocari.ui.screen_preview import ScreenPreviewWidget
-from vocari.ui.widgets import ToggleSwitch
+from vocari.ui.widgets import CheckableModelCombo, ToggleSwitch
 
 logger = get_logger("settings_window")
 
@@ -37,6 +36,7 @@ MODELS_ROOT = app_root() / "assets" / "models"
 POSITION_RANGE = 20000  # generous bound for multi-monitor setups
 MIN_SCALE_PERCENT = 10
 MAX_SCALE_PERCENT = 500
+POOL_GRID_COLUMNS = 4  # wraps instead of one long unreadable row once there are many models
 
 
 class ModelTab(QWidget):
@@ -63,7 +63,6 @@ class ModelTab(QWidget):
         self.on_model_selected = on_model_selected
         self.on_random_model_toggled = on_random_model_toggled
         self.on_random_pool_changed = on_random_pool_changed
-        self.pool_checks: dict[str, QCheckBox] = {}
 
         # Two columns: the screen preview (the thing you actually aim with)
         # on the left, the numbers that describe it on the right, so dragging
@@ -94,9 +93,15 @@ class ModelTab(QWidget):
         ]
 
         picker = QFormLayout()
-        self.model_combo = QComboBox()
+        # One list serves both jobs: picking the single active avatar (click
+        # a row) and marking which ones are eligible for random mode (click
+        # the checkbox at the row's left edge) — see CheckableModelCombo.
+        # A separate checkbox row for the latter would need its own scaling
+        # story once someone imports many models; this one already has it.
+        self.model_combo = CheckableModelCombo()
+        self.model_combo.checked_changed.connect(self._on_pool_check_toggled)
         for name in model_names:
-            self.model_combo.addItem(name, f"assets/models/{name}")
+            self.model_combo.add_item(name, f"assets/models/{name}", name in self.config.overlay.random_pool or not self.config.overlay.random_pool)
         index = self.model_combo.findData(self.config.overlay.model_path)
         self.model_combo.setCurrentIndex(max(0, index))
         self.model_combo.currentIndexChanged.connect(self._on_model_selected)
@@ -110,33 +115,15 @@ class ModelTab(QWidget):
 
         random_hint = QLabel(
             "Когда включено, выбор выше игнорируется: для каждого сообщения "
-            "берётся случайный аватар из отмеченных ниже, так что в очереди "
-            "одновременно могут стоять разные персонажи."
+            "берётся случайный аватар из отмеченных галочкой в списке выше "
+            "(галочка слева от названия — она не меняет активный аватар, "
+            "только участие в розыгрыше), так что в очереди одновременно "
+            "могут стоять разные персонажи. Если не отмечено ничего — "
+            "участвуют все."
         )
         random_hint.setWordWrap(True)
         random_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(random_hint)
-
-        pool_row = QHBoxLayout()
-        pool_row.addWidget(QLabel("Участвуют в случайном выборе:"))
-        pool_row.addStretch()
-        for name in model_names:
-            check = QCheckBox(name)
-            check.setChecked(not self.config.overlay.random_pool or name in self.config.overlay.random_pool)
-            check.toggled.connect(self._on_pool_check_toggled)
-            self.pool_checks[name] = check
-            pool_row.addWidget(check)
-        layout.addLayout(pool_row)
-
-        pool_hint = QLabel(
-            "Если ничего не отмечено — участвуют все. Список читается моделью "
-            "один раз при запуске настроек, так что папку с новой моделью надо "
-            "сначала импортировать (или добавить в assets/models вручную) и "
-            "переоткрыть настройки, чтобы она здесь появилась."
-        )
-        pool_hint.setWordWrap(True)
-        pool_hint.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(pool_hint)
 
         self.current_label = QLabel(f"Текущая модель: {self.config.overlay.model_path}")
         layout.addWidget(self.current_label)
@@ -342,11 +329,13 @@ class ModelTab(QWidget):
     def _on_random_toggled(self, checked: bool) -> None:
         self.config.overlay.random_model = checked
         self.config.save()
-        self.model_combo.setEnabled(not checked)
+        # Deliberately not disabling model_combo here (unlike a plain
+        # picker, it doubles as the random-pool checkboxes — those need to
+        # stay clickable exactly when random mode is on).
         self.on_random_model_toggled(checked)
 
     def _on_pool_check_toggled(self) -> None:
-        checked = [name for name, check in self.pool_checks.items() if check.isChecked()]
+        checked = self.model_combo.checked_names()
         self.config.overlay.random_pool = checked
         self.config.save()
         self.on_random_pool_changed(checked)
@@ -367,6 +356,16 @@ class ModelTab(QWidget):
         self.config.overlay.model_path = f"assets/models/{result.model_name}"
         self.config.save()
         self.current_label.setText(f"Текущая модель: {self.config.overlay.model_path}")
+
+        # Appends live instead of requiring settings to be reopened — a
+        # re-import of an existing name (folder already present) just
+        # reselects it rather than adding a duplicate row.
+        existing = self.model_combo.findData(self.config.overlay.model_path)
+        if existing >= 0:
+            self.model_combo.setCurrentIndex(existing)
+        else:
+            self.model_combo.add_item(result.model_name, self.config.overlay.model_path, True)
+            self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
 
         summary = [
             f"Импортировано: {result.base_layer_count} базовых слоёв; "
