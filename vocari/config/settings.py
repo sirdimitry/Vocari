@@ -26,6 +26,9 @@ class OverlayConfig:
     pos_x: int = -1
     pos_y: int = -1
     scale: float = 0.0
+    # Pick a random bundled model per message instead of always using
+    # model_path. Different avatars can then share the stage at once.
+    random_model: bool = False
 
 
 @dataclass

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
@@ -100,6 +101,48 @@ def _sway_pivot(pixmap: QPixmap) -> tuple[float, float] | None:
     return pivot_x, float(bottom_y)
 
 
+@dataclass
+class ModelPack:
+    """Everything needed to draw one model: the manifest plus the pixmaps and
+    auto-detected pivots derived from it. Several are kept loaded at once so
+    the random-avatar mode can put different characters on stage side by side
+    without reloading anything mid-animation."""
+    model: AvatarModel
+    pixmaps: dict[str, QPixmap]
+    z_order: list[tuple[str, str]]
+    sway_phase: dict[str, float]
+    sway_pivot: dict[str, tuple[float, float]]
+    bounce_pivot: dict[str, tuple[float, float]]
+
+    @classmethod
+    def build(cls, model: AvatarModel) -> "ModelPack":
+        pixmaps = {
+            filename: QPixmap(str(model.layer_path(filename)))
+            for filename in model.all_filenames()
+        }
+        sway_pivot: dict[str, tuple[float, float]] = {}
+        for filename in model.sway_layers:
+            pivot = _sway_pivot(pixmaps[filename]) if filename in pixmaps else None
+            if pivot is not None:
+                sway_pivot[filename] = pivot
+
+        center_x = model.canvas_size[0] / 2
+        bounce_pivot: dict[str, tuple[float, float]] = {}
+        for filename in model.bounce_react_layers:
+            pivot = _attachment_pivot(pixmaps[filename], center_x) if filename in pixmaps else None
+            if pivot is not None:
+                bounce_pivot[filename] = pivot
+
+        return cls(
+            model=model,
+            pixmaps=pixmaps,
+            z_order=model.build_z_order(),
+            sway_phase={name: i * 0.9 for i, name in enumerate(model.sway_layers)},
+            sway_pivot=sway_pivot,
+            bounce_pivot=bounce_pivot,
+        )
+
+
 def _attachment_pivot(pixmap: QPixmap, canvas_center_x: float) -> tuple[float, float] | None:
     """Where a bounce_react layer (e.g. an ear) is "attached": the opaque
     pixels closest to the canvas's horizontal center — a generic proxy for
@@ -132,8 +175,10 @@ class OverlayWindow(QWidget):
         self._bubble_pixmap: QPixmap | None = None
         self.reload_bubble_image()
 
-        self._z_order = model.build_z_order()
-        self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
+        # name -> ModelPack. The active model is always present; the random
+        # mode adds the rest lazily via set_available_models().
+        self._packs: dict[str, ModelPack] = {model.name: ModelPack.build(model)}
+        self.random_model = False
         self._drag_offset: QPoint | None = None
         self.stage = Stage(
             canvas_width=model.canvas_size[0],
@@ -180,8 +225,7 @@ class OverlayWindow(QWidget):
         """Hot-swap the displayed model (used by the settings "Модель" tab
         after an import, so the overlay updates without restarting the app)."""
         self.model = model
-        self._z_order = model.build_z_order()
-        self._pixmaps = self._load_pixmaps()
+        self._packs[model.name] = ModelPack.build(model)
         self.stage.set_canvas_width(model.canvas_size[0])
         self._apply_geometry()
         self.setWindowTitle(f"Vocari - {model.name}")
@@ -189,29 +233,9 @@ class OverlayWindow(QWidget):
         self.update()
 
     def _recompute_sway_layers(self) -> None:
-        self._sway_layer_phase = {
-            filename: index * 0.9 for index, filename in enumerate(self.model.sway_layers)
-        }
-        self._sway_layer_pivot = {}
-        for filename in self.model.sway_layers:
-            pixmap = self._pixmaps.get(filename)
-            pivot = _sway_pivot(pixmap) if pixmap is not None else None
-            if pivot is not None:
-                self._sway_layer_pivot[filename] = pivot
-
-        canvas_center_x = self.model.canvas_size[0] / 2
-        self._bounce_react_pivot = {}
-        for filename in self.model.bounce_react_layers:
-            pixmap = self._pixmaps.get(filename)
-            pivot = _attachment_pivot(pixmap, canvas_center_x) if pixmap is not None else None
-            if pivot is not None:
-                self._bounce_react_pivot[filename] = pivot
-
-    def _load_pixmaps(self) -> dict[str, QPixmap]:
-        pixmaps: dict[str, QPixmap] = {}
-        for filename in self.model.all_filenames():
-            pixmaps[filename] = QPixmap(str(self.model.layer_path(filename)))
-        return pixmaps
+        """Pivots live on the ModelPack now; kept as a hook for callers that
+        rebuild the active model in place."""
+        self._packs[self.model.name] = ModelPack.build(self.model)
 
     # -- stage geometry ---------------------------------------------------
 
@@ -308,12 +332,34 @@ class OverlayWindow(QWidget):
 
     # -- stage / speaker control (used by TTSQueue) ------------------------
 
+    def _pack_for(self, inst: AvatarInstance | None) -> ModelPack:
+        """The model an instance was created with — it keeps its own character
+        for its whole time on stage even if the active model changes, and in
+        random mode neighbours on stage are different characters entirely."""
+        if inst is not None and inst.model_name in self._packs:
+            return self._packs[inst.model_name]
+        return self._packs[self.model.name]
+
+    def set_available_models(self, models: list[AvatarModel]) -> None:
+        """Preloads every model that random mode may pick from."""
+        for model in models:
+            if model.name not in self._packs:
+                self._packs[model.name] = ModelPack.build(model)
+
+    def set_random_model(self, enabled: bool) -> None:
+        self.random_model = enabled
+
+    def _pick_model_name(self) -> str:
+        if self.random_model and len(self._packs) > 1:
+            return random.choice(list(self._packs))
+        return self.model.name
+
     def show_bubble_preview(self, text: str, author: str) -> None:
         """Parks a non-speaking avatar with its bubble up so the bubble
         settings can be tweaked against the real overlay. Replaces whatever
         preview was already there rather than stacking them up."""
         self.hide_bubble_preview()
-        inst = self.stage.add(text, author, preview=True)
+        inst = self.stage.add(text, author, preview=True, model_name=self._pick_model_name())
         if inst is not None:
             self._schedule_next_blink(inst.id)
         self.update()
@@ -339,7 +385,7 @@ class OverlayWindow(QWidget):
         a stage slot (speaking if free, else the next waiting slot) and
         starts sliding in from off-screen, or returns None if all 7 slots
         are taken (caller should keep `text` in its own backlog)."""
-        inst = self.stage.add(text, author)
+        inst = self.stage.add(text, author, model_name=self._pick_model_name())
         if inst is not None:
             self._schedule_next_blink(inst.id)
         self.update()
@@ -368,7 +414,9 @@ class OverlayWindow(QWidget):
     # avatars don't all blink in lockstep)
 
     def _schedule_next_blink(self, instance_id: int) -> None:
-        if "eyes" not in self.model.states:
+        inst = self.stage.get(instance_id)
+        model = self._pack_for(inst).model if inst is not None else self.model
+        if "eyes" not in model.states:
             return
         delay_ms = random.randint(BLINK_MIN_INTERVAL_MS, BLINK_MAX_INTERVAL_MS)
         QTimer.singleShot(delay_ms, lambda: self._start_blink(instance_id))
@@ -416,10 +464,11 @@ class OverlayWindow(QWidget):
             self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
             self._idle_bob_phase = (self._idle_bob_phase + IDLE_BOB_PHASE_STEP) % TWO_PI
 
-            if self._bounce_react_pivot:
-                for inst in self.stage.instances:
+            for inst in self.stage.instances:
+                pack = self._pack_for(inst)
+                if pack.bounce_pivot:
                     target_angle = BOUNCE_REACT_DEG_PER_PX * self._instance_bounce_offset(inst)
-                    for filename in self._bounce_react_pivot:
+                    for filename in pack.bounce_pivot:
                         current = inst.bounce_react_angle.get(filename, 0.0)
                         inst.bounce_react_angle[filename] = (
                             current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
@@ -528,17 +577,18 @@ class OverlayWindow(QWidget):
 
         bounce_offset = self._instance_bounce_offset(inst)
 
-        for kind, ref in self._z_order:
-            pixmap = self._resolve_layer(kind, ref, inst.active_frame)
+        pack = self._pack_for(inst)
+        for kind, ref in pack.z_order:
+            pixmap = self._resolve_layer(pack, kind, ref, inst.active_frame)
             if pixmap is None or pixmap.isNull():
                 continue
             y_offset = bounce_offset
 
-            sway_pivot = self._sway_layer_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
-            react_pivot = self._bounce_react_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+            sway_pivot = pack.sway_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
+            react_pivot = pack.bounce_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
             if sway_pivot is not None:
                 angle = SWAY_ROTATION_DEG * math.sin(
-                    self._sway_phase + self._sway_layer_phase[ref] + inst.motion_phase_offset
+                    self._sway_phase + pack.sway_phase[ref] + inst.motion_phase_offset
                 )
             elif react_pivot is not None:
                 angle = inst.bounce_react_angle.get(ref, 0.0)
@@ -563,13 +613,14 @@ class OverlayWindow(QWidget):
 
         painter.restore()
 
-    def _resolve_layer(self, kind: str, ref: str, active_frame: dict[str, str]) -> QPixmap | None:
+    def _resolve_layer(self, pack: ModelPack, kind: str, ref: str,
+                       active_frame: dict[str, str]) -> QPixmap | None:
         if kind == "layer":
-            return self._pixmaps.get(ref)
-        group = self.model.states[ref]
+            return pack.pixmaps.get(ref)
+        group = pack.model.states[ref]
         frame_name = active_frame.get(ref, next(iter(group.frames)))
         filename = group.frames.get(frame_name)
-        return self._pixmaps.get(filename) if filename else None
+        return pack.pixmaps.get(filename) if filename else None
 
     # -- drag to move -------------------------------------------------------
 

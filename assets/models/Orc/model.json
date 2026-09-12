@@ -1,0 +1,35 @@
+{
+  "name": "Orc",
+  "canvas": [
+    1280,
+    1280
+  ],
+  "base_layers": [
+    "01Back.png",
+    "02Body.png",
+    "03Ear_Right.png",
+    "12Ear_Left.png",
+    "05Head.png",
+    "08Brows.png",
+    "16Drool.png"
+  ],
+  "states": {
+    "eyes": {
+      "order": 5,
+      "open": "06Eyes_Open.png",
+      "closed": "07Eyes_Closed.png"
+    },
+    "mouth": {
+      "order": 6,
+      "open": "09Mouth_Open.png",
+      "closed": "10Mouth_Closed.png"
+    }
+  },
+  "sway_layers": [
+    "16Drool.png"
+  ],
+  "bounce_react_layers": [
+    "03Ear_Right.png",
+    "12Ear_Left.png"
+  ]
+}

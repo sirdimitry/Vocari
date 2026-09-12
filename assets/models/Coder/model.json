@@ -1,0 +1,36 @@
+{
+  "name": "Coder",
+  "canvas": [
+    1280,
+    1280
+  ],
+  "base_layers": [
+    "01HairBehind.png",
+    "02Body.png",
+    "03Ear_Right.png",
+    "12Ear_Left.png",
+    "05Head.png",
+    "13Goatee.png",
+    "08Hair.png",
+    "15Strand.png"
+  ],
+  "states": {
+    "eyes": {
+      "order": 5,
+      "open": "06Eyes_Open.png",
+      "closed": "07Eyes_Closed.png"
+    },
+    "mouth": {
+      "order": 5,
+      "open": "09Mouth_Open.png",
+      "closed": "10Mouth_Closed.png"
+    }
+  },
+  "sway_layers": [
+    "15Strand.png"
+  ],
+  "bounce_react_layers": [
+    "03Ear_Right.png",
+    "12Ear_Left.png"
+  ]
+}

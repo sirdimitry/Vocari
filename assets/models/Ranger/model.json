@@ -1,0 +1,35 @@
+{
+  "name": "Ranger",
+  "canvas": [
+    1280,
+    1280
+  ],
+  "base_layers": [
+    "01Pack.png",
+    "02Body.png",
+    "03Pad_Right.png",
+    "12Pad_Left.png",
+    "05Head.png",
+    "08Visor.png",
+    "16Antenna.png"
+  ],
+  "states": {
+    "eyes": {
+      "order": 6,
+      "open": "06Eyes_Open.png",
+      "closed": "07Eyes_Closed.png"
+    },
+    "mouth": {
+      "order": 6,
+      "open": "09Mouth_Open.png",
+      "closed": "10Mouth_Closed.png"
+    }
+  },
+  "sway_layers": [
+    "16Antenna.png"
+  ],
+  "bounce_react_layers": [
+    "03Pad_Right.png",
+    "12Pad_Left.png"
+  ]
+}

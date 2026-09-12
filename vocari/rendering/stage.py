@@ -62,6 +62,7 @@ class AvatarInstance:
     target_x_offset: float
     slot: int  # SPEAKER_SLOT, or FIRST_WAITING_SLOT..LAST_SLOT for a queued one
     author: str = ""  # who sent the message, shown in the speech bubble
+    model_name: str = ""  # which avatar model draws this one (random mode mixes them)
     # A live preview from the settings window: it parks in the speaking slot
     # with its bubble up and stays there (no synthesis, no auto-exit) so the
     # bubble settings can be adjusted against the real thing.
@@ -197,7 +198,8 @@ class Stage:
         slot = FIRST_WAITING_SLOT + len(waiting)
         return slot if slot <= LAST_SLOT else None
 
-    def add(self, text: str, author: str = "", preview: bool = False) -> AvatarInstance | None:
+    def add(self, text: str, author: str = "", preview: bool = False,
+            model_name: str = "") -> AvatarInstance | None:
         """Creates and places a new instance at the back of the queue;
         returns None if the stage is full (caller keeps the text in its own
         backlog and retries via the on_slot_freed callback)."""
@@ -208,6 +210,7 @@ class Stage:
             id=next(_id_counter),
             text=text,
             author=author,
+            model_name=model_name,
             is_preview=preview,
             x_offset=self._exit_x_offset,
             target_x_offset=self._slot_x_offset(slot),

@@ -7,6 +7,8 @@ from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -49,6 +51,8 @@ class ModelTab(QWidget):
         on_scale_changed: Callable[[float], None],
         on_entrance_side_toggled: Callable[[bool], None],
         on_exit_speed_changed: Callable[[int], None],
+        on_model_selected: Callable[[str], None],
+        on_random_model_toggled: Callable[[bool], None],
         tts_queue: TTSQueue,
     ):
         super().__init__()
@@ -58,6 +62,8 @@ class ModelTab(QWidget):
         self.on_scale_changed = on_scale_changed
         self.on_entrance_side_toggled = on_entrance_side_toggled
         self.on_exit_speed_changed = on_exit_speed_changed
+        self.on_model_selected = on_model_selected
+        self.on_random_model_toggled = on_random_model_toggled
         self.tts_queue = tts_queue
 
         # Two columns: the screen preview (the thing you actually aim with)
@@ -82,6 +88,31 @@ class ModelTab(QWidget):
     def _build_model_group(self) -> QGroupBox:
         box = QGroupBox("Модель")
         layout = QVBoxLayout(box)
+
+        picker = QFormLayout()
+        self.model_combo = QComboBox()
+        for folder in sorted(MODELS_ROOT.iterdir()) if MODELS_ROOT.exists() else []:
+            if (folder / "model.json").exists():
+                self.model_combo.addItem(folder.name, f"assets/models/{folder.name}")
+        index = self.model_combo.findData(self.config.overlay.model_path)
+        self.model_combo.setCurrentIndex(max(0, index))
+        self.model_combo.currentIndexChanged.connect(self._on_model_selected)
+        picker.addRow("Активный аватар:", self.model_combo)
+        layout.addLayout(picker)
+
+        self.random_check = QCheckBox("Случайный аватар на каждое сообщение")
+        self.random_check.setChecked(self.config.overlay.random_model)
+        self.random_check.toggled.connect(self._on_random_toggled)
+        layout.addWidget(self.random_check)
+
+        random_hint = QLabel(
+            "Когда включено, выбор выше игнорируется: для каждого сообщения "
+            "берётся случайный аватар из списка, так что в очереди одновременно "
+            "могут стоять разные персонажи."
+        )
+        random_hint.setWordWrap(True)
+        random_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(random_hint)
 
         self.current_label = QLabel(f"Текущая модель: {self.config.overlay.model_path}")
         layout.addWidget(self.current_label)
@@ -296,6 +327,21 @@ class ModelTab(QWidget):
         self.on_entrance_side_toggled(checked)
         self.preview.update()
         logger.info("Выезд аватара: %s", "справа" if checked else "слева")
+
+    def _on_model_selected(self) -> None:
+        path = self.model_combo.currentData()
+        if not path:
+            return
+        self.config.overlay.model_path = path
+        self.config.save()
+        self.current_label.setText(f"Текущая модель: {path}")
+        self.on_model_selected(path)
+
+    def _on_random_toggled(self, checked: bool) -> None:
+        self.config.overlay.random_model = checked
+        self.config.save()
+        self.model_combo.setEnabled(not checked)
+        self.on_random_model_toggled(checked)
 
     def _on_test_clicked(self) -> None:
         text = random_poem()

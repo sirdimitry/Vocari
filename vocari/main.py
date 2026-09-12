@@ -112,7 +112,33 @@ def main() -> None:
     _apply_screen_defaults(config, model)
 
     window = OverlayWindow(model, config.overlay, config.render, config.bubble)
+    # Preload every bundled model so random mode can mix characters on stage.
+    available = []
+    for folder in sorted((PROJECT_ROOT / "assets" / "models").iterdir()):
+        if not (folder / "model.json").exists():
+            continue
+        try:
+            available.append(load_model(folder))
+        except Exception:
+            logger.exception("Не удалось загрузить модель из %s", folder)
+    window.set_available_models(available)
+    window.set_random_model(config.overlay.random_model)
+    logger.info("Доступные модели: %s", ", ".join(m.name for m in available) or "—")
     window.show()
+
+    def on_model_selected(model_path: str) -> None:
+        try:
+            new_model = load_model(PROJECT_ROOT / model_path)
+        except Exception:
+            logger.exception("Не удалось загрузить модель %s", model_path)
+            return
+        window.set_model(new_model)
+        settings_window.model_tab.set_model(new_model)
+        logger.info("Активная модель: %s", new_model.name)
+
+    def on_random_model_toggled(enabled: bool) -> None:
+        window.set_random_model(enabled)
+        logger.info("Случайный аватар: %s", "включён" if enabled else "выключен")
 
     def on_model_imported(model_dir: Path) -> None:
         try:
@@ -181,6 +207,8 @@ def main() -> None:
         window.set_scale,
         window.set_entrance_from_right,
         window.stage.set_exit_speed,
+        on_model_selected,
+        on_random_model_toggled,
         on_skip_hotkey_changed,
         window.apply_bubble_settings,
         tts_providers,
