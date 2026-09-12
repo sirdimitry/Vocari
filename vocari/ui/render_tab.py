@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
@@ -26,7 +33,11 @@ class RenderTab(QWidget):
         self.on_always_on_top_toggled = on_always_on_top_toggled
         self.on_skip_hotkey_changed = on_skip_hotkey_changed
 
-        layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+
+        window_box = QGroupBox("Окно и захват в OBS")
+        layout = QVBoxLayout(window_box)
+        root.addWidget(window_box)
 
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel("Поверх всех окон"))
@@ -56,6 +67,10 @@ class RenderTab(QWidget):
         top_note.setWordWrap(True)
         top_note.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(top_note)
+
+        anim_box = QGroupBox("Анимация и рендер")
+        layout = QVBoxLayout(anim_box)
+        root.addWidget(anim_box)
 
         gpu_row = QHBoxLayout()
         gpu_row.addWidget(QLabel("Использовать GPU (RTX) вместо CPU"))
@@ -99,9 +114,9 @@ class RenderTab(QWidget):
         sway_note.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(sway_note)
 
-        hotkey_label = QLabel("Хоткей пропуска фразы")
-        hotkey_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(hotkey_label)
+        hotkey_box = QGroupBox("Хоткей пропуска фразы")
+        layout = QVBoxLayout(hotkey_box)
+        root.addWidget(hotkey_box)
 
         hotkey_row = QHBoxLayout()
         self.hotkey_button = HotkeyCaptureButton(config.hotkey.skip_message, self._on_hotkey_captured)
@@ -125,7 +140,7 @@ class RenderTab(QWidget):
         hotkey_note.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hotkey_note)
 
-        layout.addStretch()
+        root.addStretch()
 
     def _on_gpu_toggled(self, checked: bool) -> None:
         self.config.render.use_gpu = checked

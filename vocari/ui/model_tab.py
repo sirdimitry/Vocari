@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -59,9 +60,30 @@ class ModelTab(QWidget):
         self.on_exit_speed_changed = on_exit_speed_changed
         self.tts_queue = tts_queue
 
-        layout = QVBoxLayout(self)
+        # Two columns: the screen preview (the thing you actually aim with)
+        # on the left, the numbers that describe it on the right, so dragging
+        # the box and reading/typing X/Y sit side by side instead of a metre
+        # apart down a single scrolling column.
+        root = QVBoxLayout(self)
+        root.addWidget(self._build_model_group())
 
-        self.current_label = QLabel(f"Текущая модель: {config.overlay.model_path}")
+        columns = QHBoxLayout()
+        columns.setSpacing(16)
+        columns.addWidget(self._build_preview_group(model), 3)
+        columns.addWidget(self._build_geometry_group(), 2)
+        root.addLayout(columns)
+
+        root.addWidget(self._build_timing_group())
+        root.addWidget(self._build_test_group())
+        root.addStretch()
+
+    # -- sections ---------------------------------------------------------
+
+    def _build_model_group(self) -> QGroupBox:
+        box = QGroupBox("Модель")
+        layout = QVBoxLayout(box)
+
+        self.current_label = QLabel(f"Текущая модель: {self.config.overlay.model_path}")
         layout.addWidget(self.current_label)
 
         choose_button = QPushButton("Выбрать папку со своей моделью…")
@@ -81,44 +103,15 @@ class ModelTab(QWidget):
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+        return box
 
-        geometry_label = QLabel("Позиция и масштаб оверлея")
-        geometry_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(geometry_label)
+    def _build_preview_group(self, model: AvatarModel) -> QGroupBox:
+        box = QGroupBox("Превью позиции на экране")
+        layout = QVBoxLayout(box)
 
-        geometry_hint = QLabel("То же самое можно менять прямо на аватаре: перетаскивание мышью и колесо.")
-        geometry_hint.setWordWrap(True)
-        geometry_hint.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(geometry_hint)
-
-        form = QFormLayout()
-        self.pos_x_spin = QSpinBox()
-        self.pos_x_spin.setRange(-POSITION_RANGE, POSITION_RANGE)
-        self.pos_x_spin.setValue(config.overlay.pos_x)
-        form.addRow("X:", self.pos_x_spin)
-
-        self.pos_y_spin = QSpinBox()
-        self.pos_y_spin.setRange(-POSITION_RANGE, POSITION_RANGE)
-        self.pos_y_spin.setValue(config.overlay.pos_y)
-        form.addRow("Y:", self.pos_y_spin)
-
-        self.scale_spin = QDoubleSpinBox()
-        self.scale_spin.setRange(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
-        self.scale_spin.setSuffix(" %")
-        self.scale_spin.setValue(config.overlay.scale * 100)
-        form.addRow("Масштаб:", self.scale_spin)
-        layout.addLayout(form)
-
-        apply_row = QHBoxLayout()
-        apply_row.addStretch()
-        apply_button = QPushButton("Применить")
-        apply_button.clicked.connect(self._apply_geometry)
-        apply_row.addWidget(apply_button)
-        layout.addLayout(apply_row)
-
-        preview_label = QLabel("Превью позиции на экране")
-        preview_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(preview_label)
+        self.preview = ScreenPreviewWidget(self.config, model, self._on_preview_dragged)
+        self.preview.setMinimumHeight(240)
+        layout.addWidget(self.preview, 1)
 
         preview_hint = QLabel(
             "Чёрный прямоугольник — ваш экран целиком; зелёная рамка — где встанет "
@@ -129,36 +122,73 @@ class ModelTab(QWidget):
         preview_hint.setWordWrap(True)
         preview_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(preview_hint)
+        return box
 
-        self.preview = ScreenPreviewWidget(config, model, self._on_preview_dragged)
-        layout.addWidget(self.preview)
+    def _build_geometry_group(self) -> QGroupBox:
+        box = QGroupBox("Позиция и масштаб оверлея")
+        layout = QVBoxLayout(box)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.pos_x_spin = QSpinBox()
+        self.pos_x_spin.setRange(-POSITION_RANGE, POSITION_RANGE)
+        self.pos_x_spin.setValue(self.config.overlay.pos_x)
+        form.addRow("X:", self.pos_x_spin)
+
+        self.pos_y_spin = QSpinBox()
+        self.pos_y_spin.setRange(-POSITION_RANGE, POSITION_RANGE)
+        self.pos_y_spin.setValue(self.config.overlay.pos_y)
+        form.addRow("Y:", self.pos_y_spin)
+
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
+        self.scale_spin.setSuffix(" %")
+        self.scale_spin.setValue(self.config.overlay.scale * 100)
+        form.addRow("Масштаб:", self.scale_spin)
+        layout.addLayout(form)
+
+        apply_row = QHBoxLayout()
+        apply_row.addStretch()
+        apply_button = QPushButton("Применить")
+        apply_button.clicked.connect(self._apply_geometry)
+        apply_row.addWidget(apply_button)
+        layout.addLayout(apply_row)
+
+        geometry_hint = QLabel("То же самое можно менять прямо на аватаре: перетаскивание мышью и колесо.")
+        geometry_hint.setWordWrap(True)
+        geometry_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(geometry_hint)
 
         side_row = QHBoxLayout()
         side_row.addWidget(QLabel("Выезд справа (вместо слева)"))
         side_row.addStretch()
         self.entrance_side_toggle = ToggleSwitch()
-        self.entrance_side_toggle.setChecked(config.render.entrance_from_right)
+        self.entrance_side_toggle.setChecked(self.config.render.entrance_from_right)
         self.entrance_side_toggle.toggled.connect(self._on_entrance_side_toggled)
         side_row.addWidget(self.entrance_side_toggle)
         layout.addLayout(side_row)
 
-        timing_label = QLabel("Тайминги выхода и ухода")
-        timing_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        layout.addWidget(timing_label)
+        layout.addStretch()
+        return box
+
+    def _build_timing_group(self) -> QGroupBox:
+        box = QGroupBox("Тайминги выхода и ухода")
+        layout = QVBoxLayout(box)
 
         timing_form = QFormLayout()
+        timing_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self.pre_delay_slider, pre_row = self._make_slider(
-            1, 50, round(config.render.pre_speech_delay_ms / 100), self._on_pre_delay_changed, " с", 10.0
+            1, 50, round(self.config.render.pre_speech_delay_ms / 100), self._on_pre_delay_changed, " с", 10.0
         )
         timing_form.addRow("Пауза перед речью:", pre_row)
 
         self.post_delay_slider, post_row = self._make_slider(
-            1, 50, round(config.render.post_speech_hold_ms / 100), self._on_post_delay_changed, " с", 10.0
+            1, 50, round(self.config.render.post_speech_hold_ms / 100), self._on_post_delay_changed, " с", 10.0
         )
         timing_form.addRow("Пауза после речи:", post_row)
 
         self.exit_speed_slider, exit_row = self._make_slider(
-            1, 100, config.render.exit_speed, self._on_exit_speed_changed, "", 1.0
+            1, 100, self.config.render.exit_speed, self._on_exit_speed_changed, "", 1.0
         )
         timing_form.addRow("Скорость ухода:", exit_row)
         layout.addLayout(timing_form)
@@ -172,6 +202,11 @@ class ModelTab(QWidget):
         timing_hint.setWordWrap(True)
         timing_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(timing_hint)
+        return box
+
+    def _build_test_group(self) -> QGroupBox:
+        box = QGroupBox("Проверка очереди")
+        layout = QVBoxLayout(box)
 
         test_row = QHBoxLayout()
         self.test_button = QPushButton("Тест (случайный стишок)")
@@ -189,8 +224,7 @@ class ModelTab(QWidget):
         test_hint.setWordWrap(True)
         test_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(test_hint)
-
-        layout.addStretch()
+        return box
 
     def _make_slider(
         self,

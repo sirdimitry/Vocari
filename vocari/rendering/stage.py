@@ -16,16 +16,30 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable
 
-MAX_WAITING_SLOTS = 6  # + 1 speaking slot = 7 on stage at once, per spec
-SLOT_SPACING_FRACTION = 0.5  # each waiting slot, as a fraction of canvas width, left of the previous
+# Stage layout, front to back:
+#   slot 0            the speaker
+#   slot 1            deliberately left empty — a visual gap that sets the
+#                     speaker apart from everyone waiting
+#   slots 2..7        the queue itself, packed with no holes
+# The queue always closes up: when the speaker leaves, the front waiter takes
+# slot 0 and everybody behind shuffles one step forward, so the only gap on
+# stage is ever the fixed one at slot 1.
+SPEAKER_SLOT = 0
+FIRST_WAITING_SLOT = 2
+MAX_WAITING = 6  # + the speaker = 7 avatars visible at once, per spec
+LAST_SLOT = FIRST_WAITING_SLOT + MAX_WAITING - 1
+
+SLOT_SPACING_FRACTION = 0.5  # each slot, as a fraction of canvas width, behind the previous
 ENTRY_BUFFER_FRACTION = 0.35  # extra off-screen room so entrances/exits don't teleport into view
 APPROACH_LAG_COEFF = 0.33  # per-tick fraction of the remaining distance closed (lower = slower/floatier)
 ARRIVAL_EPSILON_PX = 2.0
 
-# Perspective: whoever is speaking is "closest" at full size, and each spot
-# further back in the queue is drawn smaller. Indexed by slot; anything past
-# the end reuses the last (smallest) value.
-SLOT_SCALES = (1.0, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65)
+# Perspective: the speaker is "closest" at full size, the first waiter is
+# 90%, and each spot further back drops another 5% — so an avatar visibly
+# grows as it advances up the queue.
+SPEAKER_SCALE = 1.0
+FIRST_WAITING_SCALE = 0.90
+WAITING_SCALE_STEP = 0.05
 
 # Exit speed is exposed to the user as an absolute 1..100 dial rather than a
 # lag coefficient: 1 crawls off, 100 vanishes in a single tick.
@@ -46,7 +60,7 @@ class AvatarInstance:
     text: str
     x_offset: float  # current position, canvas-relative px, 0 == speaking slot
     target_x_offset: float
-    slot: int  # 0 (speaking) .. MAX_WAITING_SLOTS, purely for bookkeeping which waiting spot is "claimed"
+    slot: int  # SPEAKER_SLOT, or FIRST_WAITING_SLOT..LAST_SLOT for a queued one
     mirrored: bool = False
     phase: str = "entering"  # entering | speaking | waiting | exiting
     active_frame: dict[str, str] = field(default_factory=lambda: {"eyes": "open", "mouth": "closed"})
@@ -127,7 +141,7 @@ class Stage:
         # How far the window needs to extend beyond the speaking slot (on the
         # entrance side) to show every waiting slot plus a buffer for
         # off-screen entry/exit.
-        self.stage_origin_x = MAX_WAITING_SLOTS * self.slot_spacing + self.entry_buffer
+        self.stage_origin_x = LAST_SLOT * self.slot_spacing + self.entry_buffer
         self._exit_x_offset = self._sign * (self.stage_origin_x + canvas_width + 50)
 
     def on_speaker_ready(self, callback: Callable[[int], None]) -> None:
@@ -144,19 +158,28 @@ class Stage:
         return self._sign * slot * self.slot_spacing
 
     def slot_scale(self, slot: int) -> float:
-        """Draw scale for a slot — see SLOT_SCALES."""
-        return SLOT_SCALES[min(slot, len(SLOT_SCALES) - 1)]
+        """Draw scale for a slot — see SPEAKER_SCALE/FIRST_WAITING_SCALE."""
+        if slot <= SPEAKER_SLOT:
+            return SPEAKER_SCALE
+        position = max(0, slot - FIRST_WAITING_SLOT)
+        return max(0.1, FIRST_WAITING_SCALE - WAITING_SCALE_STEP * position)
+
+    def _waiting_instances(self) -> list[AvatarInstance]:
+        """Everyone queued behind the speaker, front-most first."""
+        return sorted(
+            (i for i in self.instances if i.phase != "exiting" and i.slot != SPEAKER_SLOT),
+            key=lambda i: i.slot,
+        )
 
     def _next_queue_slot(self) -> int | None:
-        """The slot a newly-arrived message joins: always *behind* everyone
-        already on stage, never the first numerically-free one. Promotion
-        leaves gaps on purpose (only the front waiter steps forward, the rest
-        stay put), and filling a gap would let a later message jump the
-        queue — the arrival order is what the viewer sees and expects."""
-        if not self._occupied_slots:
-            return 0
-        slot = max(self._occupied_slots) + 1
-        return slot if slot <= MAX_WAITING_SLOTS else None
+        """Where a newly-arrived message joins: the back of the queue, which
+        is always packed — so this is simply "one past however many are
+        already waiting", never a numerically-free hole."""
+        waiting = self._waiting_instances()
+        if SPEAKER_SLOT not in self._occupied_slots and not waiting:
+            return SPEAKER_SLOT
+        slot = FIRST_WAITING_SLOT + len(waiting)
+        return slot if slot <= LAST_SLOT else None
 
     def add(self, text: str) -> AvatarInstance | None:
         """Creates and places a new instance at the back of the queue;
@@ -214,23 +237,27 @@ class Stage:
         inst.target_x_offset = self._exit_x_offset
 
     def _promote_next(self) -> None:
-        """Moves the front-most waiter into the speaking slot. Deliberately
-        picks the lowest occupied slot rather than slot 1 specifically:
-        promotion leaves gaps behind (nobody else shuffles forward), so after
-        a couple of rounds the front waiter can be sitting in slot 2, 3, … —
-        looking only at slot 1 would leave the whole stage stuck forever with
-        avatars that never speak and never leave."""
-        if 0 in self._occupied_slots:
+        """The whole queue steps forward: the front waiter takes the speaking
+        slot and everyone behind closes up one place (which is also what makes
+        them grow a little — see slot_scale). Re-packing from scratch rather
+        than nudging individual slots keeps the queue hole-free no matter what
+        happened before (skips, failed synthesis, a live side-toggle)."""
+        if SPEAKER_SLOT in self._occupied_slots:
             return
-        waiting = [inst for inst in self.instances if inst.phase != "exiting"]
+        waiting = self._waiting_instances()
         if not waiting:
             return
-        inst = min(waiting, key=lambda i: i.slot)
-        self._occupied_slots.discard(inst.slot)
-        inst.slot = 0
-        self._occupied_slots.add(0)
-        inst.target_x_offset = self._slot_x_offset(0)
-        inst.phase = "entering"  # re-arms speaker_ready once it arrives at slot 0
+
+        front, rest = waiting[0], waiting[1:]
+        self._occupied_slots = {SPEAKER_SLOT}
+        front.slot = SPEAKER_SLOT
+        front.target_x_offset = self._slot_x_offset(SPEAKER_SLOT)
+        front.phase = "entering"  # re-arms speaker_ready once it arrives
+
+        for index, inst in enumerate(rest):
+            inst.slot = FIRST_WAITING_SLOT + index
+            inst.target_x_offset = self._slot_x_offset(inst.slot)
+            self._occupied_slots.add(inst.slot)
 
     def tick(self) -> None:
         finished_exit_ids = []
