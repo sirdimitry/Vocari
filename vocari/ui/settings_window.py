@@ -1,4 +1,4 @@
-"""Settings window, opened from the tray icon: Рендер / Модель / TTS / Silero / Twitch / Тест."""
+"""Settings window, opened from the tray icon: Рендер / Модель / Облачко / TTS / Silero / Twitch."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,7 +26,6 @@ from vocari.ui.bubble_tab import BubbleTab
 from vocari.ui.model_tab import ModelTab
 from vocari.ui.render_tab import RenderTab
 from vocari.ui.silero_tab import SileroTab
-from vocari.ui.test_tab import TestTab
 from vocari.ui.tts_tab import TTSTab
 from vocari.ui.twitch_tab import TwitchTab
 
@@ -89,7 +88,6 @@ class SettingsWindow(QWidget):
         assert isinstance(silero_provider, SileroTTSProvider)
         tabs.addTab(self._wrap(SileroTab(silero_provider)), "Silero")
         tabs.addTab(self._wrap(TwitchTab(config, twitch_bot_controller)), "Twitch")
-        tabs.addTab(self._wrap(TestTab(config, tts_queue)), "Тест")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 0)
