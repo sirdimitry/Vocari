@@ -25,15 +25,27 @@
   "sway_layers": [
     {
       "file": "18HairFront.png",
-      "degrees": 5,
-      "period": 2.8,
+      "degrees": 4,
+      "period": 3.1,
       "pivot": "bottom"
     },
     {
       "file": "13Goatee.png",
-      "degrees": 4,
-      "period": 2.3,
+      "degrees": 5,
+      "period": 2.4,
       "pivot": "top"
+    },
+    {
+      "file": "02Body.png",
+      "degrees": 3,
+      "period": 4.2,
+      "pivot": "bottom"
+    },
+    {
+      "file": "05Head.png",
+      "degrees": 0.35,
+      "pivot": "bottom",
+      "follow_bounce": true
     }
   ],
   "effect_layers": [

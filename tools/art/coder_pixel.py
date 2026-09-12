@@ -1,13 +1,16 @@
-"""The programmer avatar, pixel art built from the user's reference photo:
-sandy-grey hair swept back and slightly tousled, a chin-only goatee (no
-moustache - the mouth corners are bare in the photo), deep-set grey-blue
-eyes under a heavy brow, a broad weathered face, a stonewashed denim jacket
-worn open over a dark graphic tee. See tools/art/pixel.py for the low-res-
-grid-then-upscale approach.
+"""The programmer avatar, pixel art matching the user's own reference
+drawing: a chibi-proportioned head with spiky windswept sandy hair (lighter
+at the tips), large dark half-lidded "cool" eyes, thin scars, a light patchy
+goatee, and an open denim jacket over a dark tee with a red/blue graphic.
+The reference is a full standing figure; this keeps the head-and-shoulders
+bust framing the other three bundled avatars share, so scale/perspective in
+the queue stays consistent, with the jacket collar/shoulders and folded arms
+implied rather than the legs/shoes.
 
-GRID=160 (8x upscale) - twice the resolution of the first pass, enough for
-eyelid creases, jaw stubble and individual hair strands to read clearly
-instead of just blocky colour masses.
+See tools/art/pixel.py for the low-res-grid-then-upscale approach: flat
+fills with antialiasing off, then a nearest-neighbor upscale to the shared
+1280x1280 canvas, which is what keeps pixels as hard blocks instead of
+blurring into gradients.
 """
 from __future__ import annotations
 
@@ -16,86 +19,67 @@ from tools.art.pixel import PixelCanvas
 GRID = 160  # 1280 / 160 = 8x upscale, exact
 
 CX = 80
-TOP = 22          # top of the hair mass
-HAIRLINE = 40     # where hair meets forehead skin
-CHIN = 100
-EYE_Y = 60
-BROW_Y = 52
-NOSE_Y = 70
-MOUTH_Y = 83
-JAW_W = 32  # half-width at the cheekbones - a broad, heavy-set face
+TOP = 6            # top of the tallest hair spikes
+HAIRLINE = 32       # where hair meets forehead skin
+CHIN = 90
+EYE_Y = 57
+BROW_Y = 48
+NOSE_Y = 65
+MOUTH_Y = 76
+JAW_W = 29  # half-width at the cheekbones - a rounder, younger chibi face
 
-SKIN = "#d2a077"
-SKIN_LIGHT = "#e8bd94"
-SKIN_LIGHTER = "#f4d4ae"
-SKIN_SHADOW = "#a97a52"
-SKIN_DEEP = "#7c5636"
-SKIN_DEEPER = "#5c3f28"
+SKIN = "#eec9a3"
+SKIN_LIGHT = "#f8e0bd"
+SKIN_SHADOW = "#d1a276"
+SKIN_DEEP = "#a97850"
 
-HAIR = "#a4825a"
-HAIR_LIGHT = "#c7a374"
-HAIR_LIGHTER = "#dcc090"
-HAIR_GREY = "#aaa290"
-HAIR_GREY_LIGHT = "#c4beac"
-HAIR_DARK = "#6d5030"
-HAIR_DEEP = "#4a3620"
+HAIR = "#b78a54"
+HAIR_LIGHT = "#e0bd85"
+HAIR_LIGHTER = "#f2dcae"
+HAIR_DARK = "#8a6238"
+HAIR_DEEP = "#5f4325"
 
-GOATEE = "#87693f"
-GOATEE_LIGHT = "#a5875a"
-GOATEE_DARK = "#513c20"
-GOATEE_GREY = "#9c9483"
+GOATEE = "#c7a06a"
+GOATEE_LIGHT = "#e0c290"
+GOATEE_DARK = "#8a6a3e"
 
-EYE_IRIS = "#5a7684"
-EYE_IRIS_LIGHT = "#93b1ba"
-EYE_IRIS_DARK = "#3c525c"
-EYE_DARK = "#1c1e1f"
-EYE_WHITE = "#e4ddce"
-EYE_WHITE_SHADE = "#c9c0ac"
-BROW_COLOR = "#6e5636"
-BROW_LIGHT = "#8a6e46"
+EYE = "#20304a"
+EYE_LIGHT = "#3c567c"
+EYE_HIGHLIGHT = "#c7d8ee"
+BROW_COLOR = "#8a6238"
+SCAR = "#c2544a"
 
-JACKET = "#5c7791"
-JACKET_LIGHT = "#8aa6ba"
-JACKET_LIGHTER = "#b3c8d4"
-JACKET_DARK = "#3b4e60"
-JACKET_DEEP = "#2a3844"
-JACKET_SEAM = "#22303c"
-TEE = "#26262a"
-TEE_LIGHT = "#3a3a40"
-TEE_GRAPHIC = "#9c4438"
-TEE_GRAPHIC_LIGHT = "#d6cfc0"
+JACKET = "#3c5c86"
+JACKET_LIGHT = "#5b7ea8"
+JACKET_LIGHTER = "#89aecf"
+JACKET_DARK = "#28405f"
+JACKET_SEAM = "#1c3049"
+TEE = "#1c2027"
+TEE_LIGHT = "#2c313c"
+TEE_GRAPHIC = "#b03a34"
+TEE_GRAPHIC_BLUE = "#3c5c86"
 
 
 def _head_half_width(row: int) -> float:
-    """Procedural head silhouette width per grid row - broad through the
-    cheeks/jaw (a heavier-set middle-aged face), narrowing only a little at
-    the chin rather than tapering to a point."""
+    """Round chibi head silhouette per grid row - fuller through the cheeks,
+    a soft rounded chin rather than a heavy jaw."""
     t = max(0.0, min(1.0, (row - HAIRLINE) / (CHIN - HAIRLINE)))
-    if t < 0.5:
-        return JAW_W * (0.66 + 0.34 * (t / 0.5))
-    t2 = (t - 0.5) / 0.5
-    return JAW_W - (JAW_W - 15) * (t2 ** 1.3)
+    if t < 0.58:
+        return JAW_W * (0.70 + 0.30 * (t / 0.58))
+    t2 = (t - 0.58) / 0.42
+    return JAW_W - (JAW_W - 12) * (t2 ** 1.2)
 
 
 def _skin_tone(row: int, col: int) -> str:
-    """Left-lit shading with more tiers than a flat fill: a lit patch upper-
-    left, a mid tone across most of the face, shadow toward the jaw edge and
-    right side, and a rim-dark silhouette edge."""
     hw = _head_half_width(row)
     if hw <= 0:
         return SKIN
     edge = abs(col - CX) / hw
     on_left = col < CX
-    upper = row < EYE_Y + 4
-
-    if edge > 0.92:
-        return SKIN_DEEP
-    if edge > 0.78:
+    if edge > 0.90:
         return SKIN_SHADOW
-    if on_left and upper and edge < 0.55:
-        return SKIN_LIGHTER if edge < 0.25 else SKIN_LIGHT
-    if not on_left and row > NOSE_Y:
-        return SKIN_SHADOW if edge > 0.4 else SKIN
+    if on_left and row < EYE_Y + 6 and edge < 0.55:
+        return SKIN_LIGHT
     return SKIN
 
 
@@ -107,144 +91,95 @@ def head() -> PixelCanvas:
         for x in range(x0, x1 + 1):
             c.px(x, row, _skin_tone(row, x))
 
-    # Temple hollows (the skull narrows just below the hairline before the
-    # cheekbone flares back out).
-    for row in range(HAIRLINE, HAIRLINE + 6):
-        hw = _head_half_width(row)
-        c.px(round(CX - hw) + 1, row, SKIN_SHADOW, alpha=0.5)
-        c.px(round(CX + hw) - 1, row, SKIN_SHADOW, alpha=0.4)
-
-    # Brow ridge shadow - the single strongest "weathered/heavy face" cue.
-    c.row(BROW_Y - 3, CX - 20, CX + 20, SKIN_SHADOW, alpha=0.45)
-    c.row(BROW_Y - 2, CX - 19, CX + 19, SKIN_SHADOW, alpha=0.3)
-
-    # Cheekbone highlight and hollow beneath it, then jaw/jowl shadow - a
-    # fuller face reads through the jaw line sagging slightly, not a hard
-    # jut.
+    # Jaw/chin soft shadow, cheek highlight.
+    for row in range(CHIN - 6, CHIN + 1):
+        hw = _head_half_width(row) * 0.7
+        c.row(row, round(CX - hw), round(CX + hw), SKIN_SHADOW, alpha=0.3)
     for sign in (-1, 1):
-        c.px(CX + sign * 20, NOSE_Y - 2, SKIN_LIGHT, alpha=0.5)
-        c.row(NOSE_Y + 6, CX + sign * 14, CX + sign * 22, SKIN_SHADOW, alpha=0.35)
-    for row in range(CHIN - 8, CHIN + 1):
-        hw = _head_half_width(row) * 0.75
-        c.row(row, round(CX - hw), round(CX + hw), SKIN_DEEP, alpha=0.3)
-    c.row(CHIN - 1, CX - 8, CX + 8, SKIN_DEEP, alpha=0.4)
+        c.px(CX + sign * 18, NOSE_Y - 2, SKIN_LIGHT, alpha=0.45)
 
-    # Nose: bridge, wings, tip highlight, nostril shadows.
-    c.col(CX - 1, BROW_Y + 2, NOSE_Y + 2, SKIN_SHADOW, alpha=0.45)
-    c.col(CX + 1, BROW_Y + 2, NOSE_Y + 2, SKIN_LIGHT, alpha=0.35)
-    c.row(NOSE_Y + 3, CX - 3, CX + 3, SKIN_LIGHTER, alpha=0.7)
-    for sign in (-1, 1):
-        c.px(CX + sign * 5, NOSE_Y + 5, SKIN_DEEP, alpha=0.6)
-        c.px(CX + sign * 6, NOSE_Y + 4, SKIN_SHADOW, alpha=0.5)
+    # Nose: just a soft hint, chibi faces stay mostly flat there.
+    c.px(CX, NOSE_Y, SKIN_SHADOW, alpha=0.4)
+    c.px(CX, NOSE_Y + 1, SKIN_LIGHT, alpha=0.4)
 
-    # Nasolabial folds + smile lines - weathered-face detail that a flat
-    # cartoon face skips.
-    for sign in (-1, 1):
-        for i in range(6):
-            c.px(CX + sign * (13 + i), MOUTH_Y - 8 + i, SKIN_SHADOW, alpha=0.32)
-        c.px(CX + sign * 22, MOUTH_Y + 2, SKIN_SHADOW, alpha=0.3)
-        c.px(CX + sign * 23, MOUTH_Y + 3, SKIN_SHADOW, alpha=0.25)
-    # Forehead crease lines.
-    for row in (BROW_Y - 10, BROW_Y - 14):
-        c.row(row, CX - 14, CX + 14, SKIN_SHADOW, alpha=0.18)
-    # Crow's feet by the eyes.
-    for sign in (-1, 1):
-        for i in range(3):
-            c.px(CX + sign * (25 + i), EYE_Y - 2 + i, SKIN_SHADOW, alpha=0.3)
+    # Scars: one under the left eye, one by the left ear - small, angled
+    # marks, a character detail straight from the reference art.
+    for i in range(4):
+        c.px(CX - 24 + i, EYE_Y + 6 + i, SCAR, alpha=0.85)
+    for i in range(3):
+        c.px(CX - JAW_W + 2 + i // 2, EYE_Y - 2 + i, SCAR, alpha=0.7)
 
-    # Ears, folded into the head layer.
+    # Ears.
     for side in (-1, 1):
         x = CX + side * (JAW_W - 1)
-        for row in range(EYE_Y - 2, EYE_Y + 15):
+        for row in range(EYE_Y, EYE_Y + 11):
             c.px(x, row, SKIN_SHADOW)
             c.px(x + side, row, SKIN)
-        c.px(x + side, EYE_Y + 2, SKIN_LIGHT)
-        c.px(x + side, EYE_Y + 9, SKIN_DEEP, alpha=0.6)
-        c.px(x, EYE_Y + 6, SKIN_DEEP, alpha=0.4)
+        c.px(x + side, EYE_Y + 3, SKIN_LIGHT)
 
-    # Fine skin grain to break up the flat fills a little.
-    for row in range(HAIRLINE + 2, CHIN - 6, 2):
-        hw = _head_half_width(row)
-        for col in range(round(CX - hw) + 3, round(CX + hw) - 2, 3):
-            c.px(col, row, SKIN_SHADOW, alpha=0.10)
     return c
 
 
+# Each spike is (x offset from center at its base, sideways drift by the
+# tip, base half-width, length) - rooted at/below the hairline, so the
+# silhouette itself is jagged rather than a smooth dome with lines painted
+# on top of it.
+SPIKES = [
+    (-32, -3, 7, 14),
+    (-24, -2, 8, 20),
+    (-15, 1, 8, 26),
+    (-5, 3, 9, 30),
+    (5, 6, 9, 32),
+    (15, 9, 8, 28),
+    (24, 8, 7, 21),
+    (32, 5, 6, 12),
+]
+HAIR_BASE_Y = HAIRLINE + 6  # spikes root a bit below the hairline itself
+# Tallest spike's tip must stay within the canvas (row 0) with a small
+# margin - the earlier lengths above put it a few rows above row 0, clipped
+# clean off by the canvas edge.
+
+
 def hair_back() -> PixelCanvas:
-    """Solid backing mass, drawn first so the silhouette never shows a gap at
-    the crown/sides once the front detail layer goes on top of it."""
+    """Solid backing mass, one shade darker, sitting behind the spikes - the
+    gaps between spikes in hair_front reveal slivers of this instead of the
+    transparent background, reading as shadow between strands."""
     c = PixelCanvas(GRID)
-    for row in range(TOP, HAIRLINE + 6):
-        t = (row - TOP) / (HAIRLINE + 6 - TOP)
-        hw = 34 * min(1.0, 0.5 + t * 0.9)
+    for row in range(TOP - 2, HAIR_BASE_Y + 2):
+        t = max(0.0, (row - (TOP - 2)) / (HAIR_BASE_Y + 2 - (TOP - 2)))
+        hw = 35 * min(1.0, 0.35 + t * 0.85)
         c.row(row, round(CX - hw), round(CX + hw), HAIR_DEEP)
     return c
 
 
-def _hair_front_half_width(row: int) -> float:
-    t = (row - TOP) / (HAIRLINE + 5 - TOP)
-    return 34 * min(1.0, 0.42 + t * 1.0)
-
-
 def hair_front() -> PixelCanvas:
-    """Sway layer: swept-back, slightly tousled top hair with grey streaks at
-    the temples/crown, matching the reference photo's side part and
-    windblown texture."""
+    """Sway layer: tall, messy, windswept spikes leaning to the upper right,
+    lighter toward the tips - the reference's most distinctive feature. Each
+    spike is its own tapering triangle (wide at the root, narrow at the tip)
+    instead of a filled dome with texture lines drawn over it, so the actual
+    silhouette reads as spiky rather than a smooth cap."""
     c = PixelCanvas(GRID)
-    for row in range(TOP, HAIRLINE + 5):
-        hw = _hair_front_half_width(row)
-        c.row(row, round(CX - hw), round(CX + hw), HAIR)
-
-    # Base shading: darker at the crown/back, lighter toward the front sweep.
-    for row in range(TOP, HAIRLINE + 5):
-        hw = _hair_front_half_width(row)
-        for col in range(round(CX - hw), round(CX + hw) + 1):
-            if col > CX + 4 and row < HAIRLINE - 4:
-                c.px(col, row, HAIR_DARK, alpha=0.4)
-
-    # Individual swept strands - diagonal light/dark pairs following the
-    # comb direction (back-left to front-right). Every pixel is checked
-    # against the row's own half-width so a strand can never poke outside
-    # the filled silhouette (above the crown or past the temple).
-    strand_starts = [-28, -23, -18, -13, -8, -3, 2, 7, 12, 17, 22, 27, 31]
-    for i, sx in enumerate(strand_starts):
-        light = (i % 2 == 0)
-        color = HAIR_LIGHTER if light else HAIR_LIGHT
-        sy = TOP + 1 + (2 if sx < 0 else 0)
-        for j in range(9):
-            x = CX + sx + j // 2
-            y = sy + j
-            if 0 <= x < GRID and 0 <= y < GRID and abs(x - CX) <= _hair_front_half_width(y):
-                c.px(x, y, color, alpha=0.6 if light else 0.4)
-
-    # Grey streaks at the temples/crown - the most identifying hair detail.
-    grey_patches = [
-        (CX - 30, HAIRLINE - 3, 4), (CX - 15, TOP + 2, 3),
-        (CX + 20, HAIRLINE - 5, 4), (CX + 30, HAIRLINE - 2, 3),
-        (CX - 5, TOP + 1, 3),
-    ]
-    for gx, gy, n in grey_patches:
-        for k in range(n):
-            x, y = gx + k // 2, gy + k
-            if 0 <= x < GRID and TOP <= y < GRID and abs(x - CX) <= _hair_front_half_width(y):
-                c.px(x, y, HAIR_GREY, alpha=0.8)
-                c.px(x + 1, y, HAIR_GREY_LIGHT, alpha=0.5)
-
-    # Side part: a darker seam left of center near the crown.
-    for i in range(7):
-        x, y = CX - 4 + i // 3, TOP + i
-        if abs(x - CX) <= _hair_front_half_width(y):
-            c.px(x, y, HAIR_DEEP, alpha=0.55)
-
-    # Ragged, windblown hairline edge rather than a clean arc.
-    edge = list(range(CX - 34, CX + 35, 2))
-    for i, x in enumerate(edge):
-        wobble = (i * 37) % 5 - 2  # deterministic pseudo-random jitter
-        y = HAIRLINE + wobble // 2
-        c.px(x, y, HAIR)
-        c.px(x, y + 1, HAIR, alpha=0.55)
-        if i % 4 == 0:
-            c.px(x, y - 1, HAIR_LIGHT, alpha=0.5)
+    for sx, drift, base_w, length in SPIKES:
+        tip_y = HAIR_BASE_Y - length
+        for row in range(tip_y, HAIR_BASE_Y + 1):
+            t = (row - tip_y) / length  # 0 at the tip, 1 at the root
+            width = max(1.0, base_w * (0.12 + 0.88 * t))
+            center = CX + sx * t + drift * (1 - t)
+            x0, x1 = round(center - width / 2), round(center + width / 2)
+            tip_amount = 1 - t
+            color = (
+                HAIR_LIGHTER if tip_amount > 0.65 else
+                HAIR_LIGHT if tip_amount > 0.3 else
+                HAIR
+            )
+            c.row(row, x0, x1, color)
+            c.px(x0, row, HAIR_DARK, alpha=0.4)
+    # A few stray flyaway single-pixel wisps for extra messiness.
+    for sx, tip_y_off in ((-28, -20), (-8, -30), (10, -34), (22, -24)):
+        x, y = CX + sx, HAIR_BASE_Y + tip_y_off
+        if 0 <= x < GRID and 0 <= y < GRID:
+            c.px(x, y, HAIR_LIGHTER, alpha=0.7)
+            c.px(x, y + 1, HAIR_LIGHT, alpha=0.6)
     return c
 
 
@@ -252,234 +187,153 @@ def brows() -> PixelCanvas:
     c = PixelCanvas(GRID)
     for side in (-1, 1):
         base = CX + side * 9
-        for i in range(13):
+        for i in range(10):
             x = base + side * i
-            thickness = 3 if i < 5 else (2 if i < 9 else 1)
-            y0 = BROW_Y - (1 if i < 3 else 0)
-            for t in range(thickness):
-                color = BROW_LIGHT if t == 0 else BROW_COLOR
-                c.px(x, y0 + t, color, alpha=0.95 if t else 0.6)
+            y = BROW_Y - (1 if i > 6 else 0) + (1 if side * i < -6 else 0)
+            c.px(x, y, BROW_COLOR)
     return c
 
 
 def eyes(closed: bool) -> PixelCanvas:
+    """Large, solid, half-lidded "cool" eyes - no visible iris/sclera detail
+    in the reference, just a dark almond shape with one soft highlight."""
     c = PixelCanvas(GRID)
     for side in (-1, 1):
         ex = CX + side * 15
         if closed:
-            for i in range(9):
-                c.px(ex + side * i, EYE_Y, EYE_DARK)
-            c.row(EYE_Y + 1, ex - 8, ex + 8, SKIN_SHADOW, alpha=0.4)
+            for i in range(11):
+                c.px(ex + side * i - side * 4, EYE_Y + 3, EYE, alpha=0.9)
             continue
-
-        # Sclera: an almond built from explicit per-row spans (narrower at
-        # top/bottom, widest through the middle) so nothing pokes outside its
-        # own row range - a column-shaped accent drawn taller than the eye
-        # is what caused the old "+"-shaped eyes bug.
-        c.row(EYE_Y - 3, ex - 3, ex + 3, EYE_WHITE_SHADE)
-        c.row(EYE_Y - 2, ex - 6, ex + 6, EYE_WHITE_SHADE)
-        c.row(EYE_Y - 1, ex - 6, ex + 6, EYE_WHITE)
-        c.row(EYE_Y, ex - 6, ex + 6, EYE_WHITE)
-        c.row(EYE_Y + 1, ex - 5, ex + 5, EYE_WHITE, alpha=0.9)
-        c.row(EYE_Y + 2, ex - 3, ex + 3, EYE_WHITE, alpha=0.7)
-
-        # Iris: a small filled disc, same explicit-per-row-span approach,
-        # then a darker rim and a centered pupil, both confined to rows the
-        # iris itself occupies.
-        c.row(EYE_Y - 2, ex - 2, ex + 2, EYE_IRIS_DARK)
-        c.row(EYE_Y - 1, ex - 3, ex + 3, EYE_IRIS)
-        c.row(EYE_Y, ex - 3, ex + 3, EYE_IRIS)
-        c.row(EYE_Y + 1, ex - 2, ex + 2, EYE_IRIS_DARK)
-        c.px(ex - 2, EYE_Y - 1, EYE_IRIS_LIGHT, alpha=0.75)
-        c.px(ex - 1, EYE_Y - 1, EYE_IRIS_LIGHT, alpha=0.4)
-        c.px(ex + 2, EYE_Y, EYE_IRIS_DARK, alpha=0.6)
-
-        c.row(EYE_Y - 1, ex - 1, ex + 1, EYE_DARK)
-        c.row(EYE_Y, ex - 1, ex + 1, EYE_DARK)
-        c.px(ex - 2, EYE_Y - 1, "#ffffff", alpha=0.9)  # catchlight
-
-        # Heavy upper lid + crease (deep-set eye cue), thin lower lid.
-        c.row(EYE_Y - 4, ex - 7, ex + 7, SKIN_DEEP, alpha=0.7)
-        c.row(EYE_Y - 5, ex - 6, ex + 6, SKIN_SHADOW, alpha=0.4)
-        c.px(ex - 7, EYE_Y - 3, SKIN_DEEP, alpha=0.5)
-        c.px(ex + 7, EYE_Y - 3, SKIN_DEEP, alpha=0.5)
-        # Under-eye bag + crease.
-        c.row(EYE_Y + 3, ex - 6, ex + 6, SKIN_SHADOW, alpha=0.35)
-        c.row(EYE_Y + 4, ex - 5, ex + 5, SKIN_LIGHT, alpha=0.25)
+        rows = {
+            EYE_Y - 3: (ex - 6, ex + 7),
+            EYE_Y - 2: (ex - 8, ex + 9),
+            EYE_Y - 1: (ex - 9, ex + 9),
+            EYE_Y: (ex - 9, ex + 8),
+            EYE_Y + 1: (ex - 8, ex + 7),
+            EYE_Y + 2: (ex - 6, ex + 5),
+            EYE_Y + 3: (ex - 3, ex + 3),
+        }
+        for row, (x0, x1) in rows.items():
+            c.row(row, x0, x1, EYE)
+        # Under-lid shading and a single soft highlight, per the reference.
+        for row, (x0, x1) in rows.items():
+            c.px(x1, row, EYE_LIGHT, alpha=0.5)
+        c.px(ex - 4, EYE_Y - 1, EYE_HIGHLIGHT, alpha=0.55)
+        c.px(ex - 3, EYE_Y, EYE_HIGHLIGHT, alpha=0.3)
     return c
 
 
 def eye_shine() -> PixelCanvas:
-    """The occasional-glint effect layer - a small diagonal sparkle sitting
-    just off the pupil, not a symmetric cross (which reads more like an icon
-    than a catchlight)."""
     c = PixelCanvas(GRID)
     for side in (-1, 1):
         ex = CX + side * 15
-        c.px(ex - 2, EYE_Y - 2, "#ffffff", alpha=0.9)
-        c.px(ex - 3, EYE_Y - 1, "#ffffff", alpha=0.6)
-        c.px(ex - 1, EYE_Y - 3, "#ffffff", alpha=0.5)
+        c.px(ex - 5, EYE_Y - 2, "#ffffff", alpha=0.9)
+        c.px(ex - 6, EYE_Y - 1, "#ffffff", alpha=0.5)
     return c
 
 
 def mouth(open_: bool) -> PixelCanvas:
     c = PixelCanvas(GRID)
     if open_:
-        c.row(MOUTH_Y, CX - 9, CX + 9, "#301612")
-        c.row(MOUTH_Y + 1, CX - 8, CX + 8, "#4c2420")
-        c.row(MOUTH_Y + 2, CX - 6, CX + 6, "#3a1b18")
-        c.row(MOUTH_Y - 1, CX - 9, CX + 9, SKIN_DEEP, alpha=0.6)
-        c.px(CX - 9, MOUTH_Y - 1, SKIN_DEEP, alpha=0.7)
-        c.px(CX + 9, MOUTH_Y - 1, SKIN_DEEP, alpha=0.7)
+        c.row(MOUTH_Y, CX - 5, CX + 5, "#2c1512")
+        c.row(MOUTH_Y + 1, CX - 4, CX + 4, "#442019")
+        c.row(MOUTH_Y - 1, CX - 5, CX + 5, SKIN_DEEP, alpha=0.5)
     else:
-        c.row(MOUTH_Y, CX - 10, CX + 10, SKIN_DEEP, alpha=0.75)
-        c.row(MOUTH_Y - 1, CX - 8, CX + 8, SKIN_DEEPER, alpha=0.3)
-        c.px(CX - 10, MOUTH_Y - 1, SKIN_SHADOW, alpha=0.5)
-        c.px(CX + 10, MOUTH_Y - 1, SKIN_SHADOW, alpha=0.5)
-        c.row(MOUTH_Y + 1, CX - 7, CX + 7, SKIN_LIGHT, alpha=0.3)
+        # A subtle closed smirk, curving slightly up on one side.
+        c.row(MOUTH_Y, CX - 6, CX + 2, SKIN_DEEP, alpha=0.75)
+        c.px(CX + 3, MOUTH_Y - 1, SKIN_DEEP, alpha=0.7)
+        c.px(CX + 4, MOUTH_Y - 1, SKIN_DEEP, alpha=0.55)
+        c.row(MOUTH_Y + 1, CX - 5, CX + 3, SKIN_LIGHT, alpha=0.3)
     return c
 
 
 def goatee() -> PixelCanvas:
-    """Sway layer (pivot "top"): a chin-only goatee with thin sideburn stubs
-    toward the ears - no moustache, matching the photo, where the mouth
-    corners themselves are bare."""
+    """Sway layer (pivot "top"): a light, patchy chin-only goatee - thin
+    enough that skin shows through in the texture pass, matching the
+    reference's sparse look rather than a solid mass."""
     c = PixelCanvas(GRID)
-
-    # Thin jaw-line connectors toward the ears.
-    for side in (-1, 1):
-        for i, row in enumerate(range(MOUTH_Y - 5, MOUTH_Y + 3)):
-            width = 17 - i
-            c.px(CX + side * width, row, GOATEE, alpha=0.7)
-            c.px(CX + side * (width - 1), row, GOATEE, alpha=0.5)
-
     rows = {
-        MOUTH_Y - 1: (CX - 14, CX + 14),
-        MOUTH_Y: (CX - 15, CX + 15),
-        MOUTH_Y + 1: (CX - 16, CX + 16),
-        MOUTH_Y + 2: (CX - 16, CX + 16),
-        MOUTH_Y + 3: (CX - 15, CX + 15),
-        MOUTH_Y + 4: (CX - 14, CX + 14),
-        MOUTH_Y + 5: (CX - 12, CX + 12),
-        MOUTH_Y + 6: (CX - 10, CX + 10),
-        MOUTH_Y + 7: (CX - 8, CX + 8),
-        MOUTH_Y + 8: (CX - 6, CX + 6),
-        MOUTH_Y + 9: (CX - 4, CX + 4),
-        MOUTH_Y + 10: (CX - 3, CX + 3),
-        MOUTH_Y + 11: (CX - 2, CX + 2),
-        MOUTH_Y + 12: (CX - 1, CX + 1),
-        MOUTH_Y + 13: (CX, CX),
+        MOUTH_Y + 1: (CX - 9, CX + 9),
+        MOUTH_Y + 2: (CX - 10, CX + 10),
+        MOUTH_Y + 3: (CX - 10, CX + 10),
+        MOUTH_Y + 4: (CX - 9, CX + 9),
+        MOUTH_Y + 5: (CX - 7, CX + 7),
+        MOUTH_Y + 6: (CX - 5, CX + 5),
+        MOUTH_Y + 7: (CX - 3, CX + 3),
+        MOUTH_Y + 8: (CX - 1, CX + 1),
     }
     for row, (x0, x1) in rows.items():
-        c.row(row, x0, x1, GOATEE)
-
-    # Wiry texture: alternating light/dark vertical strokes rather than a
-    # flat fill, plus a darker edge.
+        c.row(row, x0, x1, GOATEE, alpha=0.85)
+    # Patchy texture: skip pixels in a checker-ish pattern so it reads as
+    # sparse stubble rather than a solid beard mass.
     for row, (x0, x1) in rows.items():
-        c.px(x0, row, GOATEE_DARK, alpha=0.65)
-        c.px(x1, row, GOATEE_DARK, alpha=0.65)
-    for col_offset in range(-14, 15, 2):
-        x = CX + col_offset
-        for row in range(MOUTH_Y - 1, MOUTH_Y + 11):
-            if (row + col_offset) % 3 == 0:
-                c.px(x, row, GOATEE_LIGHT, alpha=0.35)
-
-    # A scatter of grey hairs, as in the photo.
-    for x, y in ((CX - 8, MOUTH_Y + 2), (CX + 6, MOUTH_Y + 4), (CX, MOUTH_Y + 7),
-                 (CX - 4, MOUTH_Y + 9), (CX + 9, MOUTH_Y), (CX - 11, MOUTH_Y + 1)):
-        c.px(x, y, GOATEE_GREY, alpha=0.8)
+        for x in range(x0, x1 + 1):
+            if (x + row) % 3 == 0:
+                c.px(x, row, SKIN, alpha=0.35)
+            elif (x + row) % 5 == 0:
+                c.px(x, row, GOATEE_LIGHT, alpha=0.6)
+        c.px(x0, row, GOATEE_DARK, alpha=0.6)
+        c.px(x1, row, GOATEE_DARK, alpha=0.6)
     return c
 
 
 def body() -> PixelCanvas:
+    """Sway layer (pivot "bottom"): the torso/jacket itself gently rocks
+    side to side from its base, an idle "standing and swaying" motion."""
     c = PixelCanvas(GRID)
-    # Neck, shaded so it reads as a cylinder rather than a flat rectangle.
-    c.rect(CX - 13, CHIN, 27, 10, SKIN_SHADOW)
-    c.rect(CX - 10, CHIN, 9, 10, SKIN)
-    c.rect(CX - 2, CHIN, 4, 10, SKIN_LIGHT, alpha=0.5)
-    c.rect(CX + 8, CHIN, 5, 10, SKIN_DEEP, alpha=0.5)
+    c.rect(CX - 11, CHIN, 23, 9, SKIN_SHADOW)
+    c.rect(CX - 8, CHIN, 8, 9, SKIN)
 
-    # Tee, visible through the open jacket front.
-    for row in range(CHIN + 8, GRID):
-        t = (row - (CHIN + 8)) / (GRID - (CHIN + 8))
-        hw = 15 + t * 12
+    for row in range(CHIN + 6, GRID):
+        t = (row - (CHIN + 6)) / (GRID - (CHIN + 6))
+        hw = 16 + t * 13
         c.row(row, round(CX - hw), round(CX + hw), TEE)
-    for row in range(CHIN + 8, GRID, 4):
-        c.px(round(CX - 15 - (row - CHIN - 8) * 0.1), row, TEE_LIGHT, alpha=0.4)
-    # Graphic swash on the tee.
-    for row in range(CHIN + 20, CHIN + 30):
-        t = (row - (CHIN + 20)) / 10
-        hw = 9 - abs(t - 0.5) * 4
-        c.row(row, round(CX - hw), round(CX + hw), TEE_GRAPHIC, alpha=0.75)
-    c.row(CHIN + 24, CX - 7, CX + 7, TEE_GRAPHIC_LIGHT, alpha=0.55)
-    c.row(CHIN + 26, CX - 5, CX + 5, TEE_GRAPHIC_LIGHT, alpha=0.4)
+    for row in range(CHIN + 14, CHIN + 24):
+        t = (row - (CHIN + 14)) / 10
+        hw = 9 - abs(t - 0.5) * 3
+        c.row(row, round(CX - hw), round(CX + hw), TEE_GRAPHIC, alpha=0.8)
+    c.row(CHIN + 18, CX - 7, CX + 7, TEE_GRAPHIC_BLUE, alpha=0.6)
+    for row in range(CHIN + 6, GRID, 5):
+        c.px(round(CX - 16 - (row - CHIN) * 0.1), row, TEE_LIGHT, alpha=0.35)
 
-    # Denim jacket: two open panels, shoulder to hem, with a proper collar
-    # notch, lapel fold, and worn/faded shading rather than a flat wash.
     for side in (-1, 1):
-        for row in range(CHIN - 2, GRID):
-            t = (row - (CHIN - 2)) / (GRID - (CHIN - 2))
-            outer = 48 + t * 26
-            if row < CHIN + 8:
-                inner = 20 - (row - (CHIN - 2)) * 1.1
-            else:
-                inner = 13 + t * 10
+        for row in range(CHIN - 1, GRID):
+            t = (row - (CHIN - 1)) / (GRID - (CHIN - 1))
+            outer = 46 + t * 24
+            inner = (18 - (row - (CHIN - 1)) * 1.0) if row < CHIN + 7 else (12 + t * 9)
             x0 = CX + side * round(inner)
             x1 = CX + side * round(outer)
             lo, hi = (x0, x1) if x0 < x1 else (x1, x0)
             c.row(row, lo, hi, JACKET)
 
-        # Shoulder highlight (top seam catching the light).
-        for row in range(CHIN - 2, CHIN + 10):
-            t = (row - (CHIN - 2)) / 12
-            outer = round(48 + t * 10)
+        for row in range(CHIN - 1, CHIN + 9):
+            t = (row - (CHIN - 1)) / 10
+            outer = round(46 + t * 8)
             c.px(CX + side * outer, row, JACKET_LIGHTER, alpha=0.65)
-            c.px(CX + side * (outer - 1), row, JACKET_LIGHT, alpha=0.5)
+            c.px(CX + side * (outer - 1), row, JACKET_LIGHT, alpha=0.45)
 
-        # Lapel fold shading along the open edge, darker where it curls in.
         for row in range(CHIN + 2, GRID, 2):
-            t = (row - (CHIN - 2)) / (GRID - (CHIN - 2))
-            inner = round(13 + t * 10) if row >= CHIN + 8 else round(20 - (row - (CHIN - 2)) * 1.1)
-            c.px(CX + side * inner, row, JACKET_DEEP, alpha=0.6)
-            c.px(CX + side * (inner + 2), row, JACKET_DARK, alpha=0.4)
+            t = (row - (CHIN - 1)) / (GRID - (CHIN - 1))
+            inner = round((18 - (row - (CHIN - 1)) * 1.0) if row < CHIN + 7 else (12 + t * 9))
+            c.px(CX + side * inner, row, JACKET_DARK, alpha=0.55)
+            c.px(CX + side * (inner + 2), row, JACKET_SEAM, alpha=0.35)
 
-        # Worn/faded patches - lighter blotches scattered on the panel, a
-        # stonewash cue.
-        fade_spots = [(0.3, 0.35), (0.55, 0.6), (0.75, 0.3), (0.4, 0.75)]
-        for ft, fx in fade_spots:
-            row = round((CHIN - 2) + ft * (GRID - (CHIN - 2)))
-            outer = 48 + ft * 26
-            inner = 13 + ft * 10
-            x = CX + side * round(inner + fx * (outer - inner))
-            c.px(x, row, JACKET_LIGHT, alpha=0.35)
-            c.px(x + 1, row, JACKET_LIGHT, alpha=0.25)
-            c.px(x, row + 1, JACKET_LIGHT, alpha=0.25)
+        collar = ((6, -3), (10, -1), (13, 2), (16, 5))
+        for dx, dy in collar:
+            c.px(CX + side * dx, CHIN + dy, JACKET_DARK, alpha=0.85)
+            c.px(CX + side * dx, CHIN + dy + 1, JACKET_LIGHT, alpha=0.5)
 
-        # Collar, folded open over the shoulder.
-        collar = (
-            (CX + side * 6, CHIN - 3), (CX + side * 10, CHIN - 1),
-            (CX + side * 13, CHIN + 2), (CX + side * 16, CHIN + 5),
-        )
-        for x, y in collar:
-            c.px(x, y, JACKET_DARK, alpha=0.85)
-            c.px(x, y + 1, JACKET_LIGHT, alpha=0.5)
-
-        # Seam stitching down the lapel edge and a button.
-        for row in range(CHIN + 12, GRID, 6):
-            t = (row - (CHIN - 2)) / (GRID - (CHIN - 2))
-            inner = round(13 + t * 10)
-            c.px(CX + side * (inner + 3), row, JACKET_SEAM, alpha=0.5)
-        c.px(CX + side * 20, CHIN + 24, JACKET_SEAM, alpha=0.85)
-        c.px(CX + side * 20, CHIN + 40, JACKET_SEAM, alpha=0.85)
+        c.px(CX + side * 19, CHIN + 22, JACKET_SEAM, alpha=0.85)
+        c.px(CX + side * 19, CHIN + 38, JACKET_SEAM, alpha=0.85)
     return c
 
 
 def back() -> PixelCanvas:
     c = PixelCanvas(GRID)
-    for row in range(CHIN - 10, GRID):
-        t = (row - (CHIN - 10)) / (GRID - (CHIN - 10))
-        hw = 58 + t * 16
-        c.row(row, round(CX - hw), round(CX + hw), JACKET_DEEP, alpha=0.85)
+    for row in range(CHIN - 8, GRID):
+        t = (row - (CHIN - 8)) / (GRID - (CHIN - 8))
+        hw = 54 + t * 14
+        c.row(row, round(CX - hw), round(CX + hw), JACKET_DARK, alpha=0.85)
     return c
 
 
@@ -509,8 +363,16 @@ MANIFEST = {
         "mouth": {"order": 6, "open": "09Mouth_Open.png", "closed": "10Mouth_Closed.png"},
     },
     "sway_layers": [
-        {"file": "18HairFront.png", "degrees": 5, "period": 2.8, "pivot": "bottom"},
-        {"file": "13Goatee.png", "degrees": 4, "period": 2.3, "pivot": "top"},
+        # Hair sways gently on its own clock; the goatee dangles from its
+        # root at the chin. The body itself gets a slow idle "standing and
+        # swaying" rock from its base (the hips, off the bottom of the
+        # frame), and the head nods slightly in time with the bounce/talk
+        # signal instead of its own clock - a small motion while speaking,
+        # still while silent.
+        {"file": "18HairFront.png", "degrees": 4, "period": 3.1, "pivot": "bottom"},
+        {"file": "13Goatee.png", "degrees": 5, "period": 2.4, "pivot": "top"},
+        {"file": "02Body.png", "degrees": 3, "period": 4.2, "pivot": "bottom"},
+        {"file": "05Head.png", "degrees": 0.35, "pivot": "bottom", "follow_bounce": True},
     ],
     "effect_layers": [
         {"file": "19EyeShine.png", "effect": "sparkle", "period": 5.5, "duty": 0.06, "max_opacity": 0.9},
