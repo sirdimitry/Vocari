@@ -308,6 +308,32 @@ class OverlayWindow(QWidget):
 
     # -- stage / speaker control (used by TTSQueue) ------------------------
 
+    def show_bubble_preview(self, text: str, author: str) -> None:
+        """Parks a non-speaking avatar with its bubble up so the bubble
+        settings can be tweaked against the real overlay. Replaces whatever
+        preview was already there rather than stacking them up."""
+        self.hide_bubble_preview()
+        inst = self.stage.add(text, author, preview=True)
+        if inst is not None:
+            self._schedule_next_blink(inst.id)
+        self.update()
+
+    def hide_bubble_preview(self) -> None:
+        for inst in list(self.stage.instances):
+            if inst.is_preview:
+                self.stage.retire(inst.id)
+        self.update()
+
+    def update_preview_message(self, text: str, author: str) -> None:
+        """Live-edits the text/nick of a preview that's already on stage."""
+        for inst in self.stage.instances:
+            if inst.is_preview:
+                inst.text, inst.author = text, author
+        self.update()
+
+    def has_bubble_preview(self) -> bool:
+        return any(i.is_preview and i.phase != "exiting" for i in self.stage.instances)
+
     def add_speaker(self, text: str, author: str = "") -> AvatarInstance | None:
         """Requests a new avatar instance for `text`; it immediately claims
         a stage slot (speaking if free, else the next waiting slot) and

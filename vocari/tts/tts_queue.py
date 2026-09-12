@@ -93,6 +93,19 @@ class TTSQueue(QObject):
             self._backlog.append((text, author))
             logger.debug("TTS-очередь: сцена занята (7/7), сообщение ждёт в резерве (%d в резерве)", len(self._backlog))
 
+    def show_bubble_preview(self, message: tuple[str, str]) -> None:
+        """Settings-window preview: park an avatar with its bubble up, no
+        synthesis and no auto-exit, so bubble settings can be judged live."""
+        text, author = message
+        self.window.show_bubble_preview(text, author)
+
+    def update_bubble_preview(self, message: tuple[str, str]) -> None:
+        text, author = message
+        self.window.update_preview_message(text, author)
+
+    def hide_bubble_preview(self) -> None:
+        self.window.hide_bubble_preview()
+
     def _on_slot_freed(self) -> None:
         if self._backlog:
             text, author = self._backlog.popleft()

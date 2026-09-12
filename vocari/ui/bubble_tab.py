@@ -3,7 +3,6 @@ test button that puts a real message on stage so it can be judged in place
 rather than from a description."""
 from __future__ import annotations
 
-import random
 from typing import Callable
 
 from PySide6.QtCore import Qt
@@ -44,7 +43,7 @@ POSITIONS: list[tuple[str, str]] = [
     ("right", "Справа от аватара"),
 ]
 
-TEST_NICKS = ["Зритель", "ChatUser", "Аноним", "Подписчик", "viewer_42"]
+DEFAULT_TEST_NICK = "sirdimitry"
 
 
 class ColorButton(QPushButton):
@@ -107,7 +106,7 @@ class BubbleTab(QWidget):
         layout = QVBoxLayout(box)
 
         form = QFormLayout()
-        self.test_nick = QLineEdit(random.choice(TEST_NICKS))
+        self.test_nick = QLineEdit(DEFAULT_TEST_NICK)
         form.addRow("Ник отправителя:", self.test_nick)
         layout.addLayout(form)
 
@@ -124,10 +123,22 @@ class BubbleTab(QWidget):
         row.addWidget(another)
         layout.addLayout(row)
 
+        self.preview_button = QPushButton("Держать облачко на экране для настройки")
+        self.preview_button.setCheckable(True)
+        self.preview_button.toggled.connect(self._on_preview_toggled)
+        layout.addWidget(self.preview_button)
+
+        # Live-edit the parked preview as the text/nick are typed.
+        self.test_text.textChanged.connect(self._refresh_preview_message)
+        self.test_nick.textChanged.connect(self._refresh_preview_message)
+
         hint = QLabel(
-            "Аватар выедет как при обычном сообщении: приедет, поднимется облачко "
-            "с ником и текстом, прозвучит озвучка, потом облачко пропадёт — и "
-            "только после этого аватар зеркалится и уезжает."
+            "«Тест» — полный цикл как при обычном сообщении: приедет, поднимется "
+            "облачко, прозвучит озвучка, облачко пропадёт и только потом аватар "
+            "уедет.\n"
+            "«Держать на экране» — аватар выезжает и остаётся с облачком, пока "
+            "кнопка нажата: меняйте форму, цвета, прозрачность, шрифты — всё видно "
+            "сразу, без озвучки."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -173,6 +184,19 @@ class BubbleTab(QWidget):
 
         self.border_button = ColorButton(self.config.bubble.border_color, self._on_border_changed)
         form.addRow("Цвет обводки:", self.border_button)
+
+        opacity_row = QHBoxLayout()
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(self.config.bubble.opacity)
+        self.opacity_readout = QLabel(f"{self.config.bubble.opacity} %")
+        self.opacity_readout.setMinimumWidth(44)
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_readout)
+        opacity_widget = QWidget()
+        opacity_widget.setLayout(opacity_row)
+        form.addRow("Непрозрачность:", opacity_widget)
 
         self.scale_spin = QDoubleSpinBox()
         self.scale_spin.setRange(0.5, 2.0)
@@ -349,6 +373,26 @@ class BubbleTab(QWidget):
 
     def _on_speed_changed(self, value: int) -> None:
         self._set("appear_speed", value)
+
+    def _on_opacity_changed(self, value: int) -> None:
+        self.opacity_readout.setText(f"{value} %")
+        self._set("opacity", value)
+
+    def _on_preview_toggled(self, checked: bool) -> None:
+        if checked:
+            self.tts_queue.show_bubble_preview(self._current_message())
+            self.preview_button.setText("Убрать облачко с экрана")
+        else:
+            self.tts_queue.hide_bubble_preview()
+            self.preview_button.setText("Держать облачко на экране для настройки")
+
+    def _refresh_preview_message(self) -> None:
+        if self.preview_button.isChecked():
+            self.tts_queue.update_bubble_preview(self._current_message())
+
+    def _current_message(self) -> tuple[str, str]:
+        text = self.test_text.toPlainText().strip() or random_poem()
+        return text, self.test_nick.text().strip()
 
     def _sync_custom_row(self) -> None:
         is_custom = self.config.bubble.style == "custom"

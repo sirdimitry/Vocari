@@ -74,20 +74,23 @@ class BubbleConfig:
     # height — the bubble grows to fit the text but never past this.
     max_width_fraction: float = 1.6
     max_height_fraction: float = 0.9
-    position: str = "top"  # top | top-left | top-right | left | right
+    position: str = "top-right"  # top | top-left | top-right | left | right
     offset_x: int = 0  # extra nudge in canvas px, on top of `position`
     offset_y: int = 0
 
     background_color: str = "#f7f7fbf0"  # #RRGGBBAA — alpha keeps it readable over anything
     border_color: str = "#2b2b33"
+    # Overall backdrop transparency, 0..100 (%). Multiplies the fill/outline
+    # alpha; the text itself stays fully opaque so it never becomes unreadable.
+    opacity: int = 100
 
     text_color: str = "#16161a"
-    text_font: str = "Segoe UI"
+    text_font: str = "Cascadia Code"
     text_size: int = 46
 
-    nick_color: str = "#6c5ce7"
-    nick_font: str = "Segoe UI"
-    nick_size: int = 40
+    nick_color: str = "#00d0d0"
+    nick_font: str = "Segoe UI Black"
+    nick_size: int = 70
     nick_bold: bool = True
     nick_italic: bool = False
 

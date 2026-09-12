@@ -161,16 +161,34 @@ def _backdrop_path(style: str, rect: QRectF, tail_at: float | None) -> QPainterP
         path.lineTo(rect.left(), rect.top() + cut)
         path.closeSubpath()
     elif style == "cloud":
-        # A rounded body with bumps along the top edge, which reads as the
-        # classic comic-book speech balloon without needing any artwork.
-        path.addRoundedRect(rect, rect.height() * 0.32, rect.height() * 0.32)
-        bump_r = min(rect.height() * 0.22, rect.width() * 0.12)
-        count = max(2, int(rect.width() / (bump_r * 2.1)))
-        for index in range(count):
-            cx = rect.left() + bump_r + index * (rect.width() - 2 * bump_r) / max(1, count - 1)
-            bump = QPainterPath()
-            bump.addEllipse(QPointF(cx, rect.top() + bump_r * 0.35), bump_r, bump_r)
-            path = path.united(bump)
+        # A proper comic-book balloon: a core rounded rect with overlapping
+        # lobes all the way around the perimeter, not just along the top edge
+        # (bumps on one side only just read as a scalloped box).
+        # Lobes need to be small relative to the body and to overlap heavily —
+        # large, sparse ones read as a cog or a flower rather than a cloud.
+        bump_r = max(10.0, min(rect.height() * 0.26, rect.width() * 0.095))
+        core = rect.adjusted(bump_r * 0.62, bump_r * 0.62, -bump_r * 0.62, -bump_r * 0.62)
+        path.addRoundedRect(core, bump_r, bump_r)
+
+        def lobes(count: int, at) -> None:
+            nonlocal path
+            for index in range(count):
+                t = index / max(1, count - 1)
+                cx, cy = at(t)
+                lobe = QPainterPath()
+                # Gentle size variation: enough to look hand-drawn, not enough
+                # to break the silhouette into separate blobs.
+                radius = bump_r * (0.84 + 0.40 * ((index * 3) % 4) / 3)
+                lobe.addEllipse(QPointF(cx, cy), radius, radius)
+                path = path.united(lobe)
+
+        step = bump_r * 1.28  # overlapping, but still visibly billowy
+        across = max(4, int(core.width() / step) + 1)
+        down = max(3, int(core.height() / step) + 1)
+        lobes(across, lambda t: (core.left() + t * core.width(), core.top()))
+        lobes(across, lambda t: (core.left() + t * core.width(), core.bottom()))
+        lobes(down, lambda t: (core.left(), core.top() + t * core.height()))
+        lobes(down, lambda t: (core.right(), core.top() + t * core.height()))
     else:  # "rounded", "glass", and the fallback for custom art
         radius = min(34.0, rect.height() / 3)
         path.addRoundedRect(rect, radius, radius)
@@ -206,7 +224,10 @@ def paint(
     if config.style == "custom" and custom_pixmap is not None and not custom_pixmap.isNull():
         # Stretched as a 9-slice so the corners of someone's own artwork keep
         # their shape however much the text grows.
+        painter.save()
+        painter.setOpacity(painter.opacity() * max(0, min(100, config.opacity)) / 100.0)
         _draw_nine_slice(painter, custom_pixmap, rect)
+        painter.restore()
     else:
         fill = QColor(config.background_color)
         border = QColor(config.border_color)
@@ -214,9 +235,13 @@ def paint(
 
         if config.style == "glass":
             fill.setAlpha(max(60, min(fill.alpha(), 190)))
-            painter.setPen(QPen(border, 3))
-        else:
-            painter.setPen(QPen(border, 4))
+
+        # The opacity dial scales the backdrop only — the text keeps its own
+        # alpha so turning the bubble see-through never costs readability.
+        factor = max(0, min(100, config.opacity)) / 100.0
+        fill.setAlpha(round(fill.alpha() * factor))
+        border.setAlpha(round(border.alpha() * factor))
+        painter.setPen(QPen(border, 3 if config.style == "glass" else 4))
         painter.setBrush(QBrush(fill))
         painter.drawPath(path)
 

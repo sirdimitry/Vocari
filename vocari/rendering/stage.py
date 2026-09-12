@@ -62,6 +62,10 @@ class AvatarInstance:
     target_x_offset: float
     slot: int  # SPEAKER_SLOT, or FIRST_WAITING_SLOT..LAST_SLOT for a queued one
     author: str = ""  # who sent the message, shown in the speech bubble
+    # A live preview from the settings window: it parks in the speaking slot
+    # with its bubble up and stays there (no synthesis, no auto-exit) so the
+    # bubble settings can be adjusted against the real thing.
+    is_preview: bool = False
     # 0 = no bubble, 1 = fully popped in; animated by tick() so the bubble
     # scales in and back out instead of blinking on and off.
     bubble_progress: float = 0.0
@@ -193,7 +197,7 @@ class Stage:
         slot = FIRST_WAITING_SLOT + len(waiting)
         return slot if slot <= LAST_SLOT else None
 
-    def add(self, text: str, author: str = "") -> AvatarInstance | None:
+    def add(self, text: str, author: str = "", preview: bool = False) -> AvatarInstance | None:
         """Creates and places a new instance at the back of the queue;
         returns None if the stage is full (caller keeps the text in its own
         backlog and retries via the on_slot_freed callback)."""
@@ -204,6 +208,7 @@ class Stage:
             id=next(_id_counter),
             text=text,
             author=author,
+            is_preview=preview,
             x_offset=self._exit_x_offset,
             target_x_offset=self._slot_x_offset(slot),
             slot=slot,
@@ -302,7 +307,9 @@ class Stage:
             if inst.phase == "entering":
                 if inst.slot == 0:
                     inst.phase = "speaking"
-                    if self._on_speaker_ready:
+                    if inst.is_preview:
+                        inst.bubble_shown = True  # and no synthesis, it just waits
+                    elif self._on_speaker_ready:
                         self._on_speaker_ready(inst.id)
                 else:
                     inst.phase = "waiting"
