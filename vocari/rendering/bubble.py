@@ -262,18 +262,28 @@ def paint(
     if nick:
         nick_font = _font(config.nick_font, config.nick_size, config.nick_bold, config.nick_italic)
         nick_rect = QRectF(inner.left(), y, inner.width(), layout.nick_height)
-        _draw_text(painter, nick_rect, nick_font, QColor(config.nick_color), nick)
+        _draw_text(
+            painter, nick_rect, nick_font, QColor(config.nick_color), nick,
+            QColor(config.nick_stroke_color), config.nick_stroke_width,
+        )
         y += layout.nick_height + NICK_GAP
 
     text_rect = QRectF(inner.left(), y, inner.width(), layout.text_height)
-    _draw_text(painter, text_rect, _font(config.text_font, layout.text_size), QColor(config.text_color), text)
+    _draw_text(
+        painter, text_rect, _font(config.text_font, layout.text_size), QColor(config.text_color), text,
+        QColor(config.text_stroke_color), config.text_stroke_width,
+    )
 
     painter.restore()
 
 
-def _draw_text(painter: QPainter, rect: QRectF, font: QFont, color: QColor, text: str) -> None:
-    """Centred, word-wrapped text with a thin contrasting halo, so it stays
-    legible even if the fill colour happens to match the stream behind it."""
+def _draw_text(painter: QPainter, rect: QRectF, font: QFont, color: QColor, text: str,
+                stroke_color: QColor, stroke_width: int) -> None:
+    """Centred, word-wrapped text with a configurable outline behind the
+    fill, so it stays legible even if the fill colour happens to match the
+    stream behind it. The outline is approximated by stamping the text at
+    every offset on/inside a stroke_width-radius disc rather than an actual
+    stroked path — cheap, and QPainter has no built-in text outline."""
     painter.setFont(font)
     flags = (
         wrap_flags(QFontMetricsF(font), rect.width(), text)
@@ -281,10 +291,17 @@ def _draw_text(painter: QPainter, rect: QRectF, font: QFont, color: QColor, text
         | int(Qt.AlignmentFlag.AlignVCenter)
     )
 
-    halo = QColor(0, 0, 0, 90) if color.lightnessF() > 0.5 else QColor(255, 255, 255, 110)
-    painter.setPen(halo)
-    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-        painter.drawText(rect.translated(dx, dy), flags, text)
+    if stroke_width > 0 and stroke_color.alpha() > 0:
+        painter.setPen(stroke_color)
+        r = stroke_width
+        r2 = r * r
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                if dx * dx + dy * dy > r2:
+                    continue
+                painter.drawText(rect.translated(dx, dy), flags, text)
 
     painter.setPen(color)
     painter.drawText(rect, flags, text)

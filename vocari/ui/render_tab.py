@@ -1,4 +1,4 @@
-"""Settings -> "Рендер": GPU/CPU render backend toggle + the sway/bounce toggle."""
+"""Settings -> "Рендер": window/OBS capture options + the sway/bounce toggle."""
 from __future__ import annotations
 
 from typing import Callable
@@ -72,24 +72,6 @@ class RenderTab(QWidget):
         layout = QVBoxLayout(anim_box)
         root.addWidget(anim_box)
 
-        gpu_row = QHBoxLayout()
-        gpu_row.addWidget(QLabel("Использовать GPU (RTX) вместо CPU"))
-        gpu_row.addStretch()
-        self.gpu_toggle = ToggleSwitch()
-        self.gpu_toggle.setChecked(config.render.use_gpu)
-        self.gpu_toggle.toggled.connect(self._on_gpu_toggled)
-        gpu_row.addWidget(self.gpu_toggle)
-        layout.addLayout(gpu_row)
-
-        gpu_note = QLabel(
-            "Пока переключатель только сохраняет выбор в config.json — сам "
-            "GPU-рендер (OpenGL) будет включён отдельным обновлением конвейера "
-            "рендеринга, чтобы не сломать прозрачность окна."
-        )
-        gpu_note.setWordWrap(True)
-        gpu_note.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(gpu_note)
-
         sway_row = QHBoxLayout()
         sway_row.addWidget(QLabel("Покачивание (ахоге + фон + подпрыг при речи)"))
         sway_row.addStretch()
@@ -141,11 +123,6 @@ class RenderTab(QWidget):
         layout.addWidget(hotkey_note)
 
         root.addStretch()
-
-    def _on_gpu_toggled(self, checked: bool) -> None:
-        self.config.render.use_gpu = checked
-        self.config.save()
-        logger.info("Рендер-бэкенд в настройках: %s", "GPU" if checked else "CPU")
 
     def _on_sway_toggled(self, checked: bool) -> None:
         self.config.render.enable_sway = checked

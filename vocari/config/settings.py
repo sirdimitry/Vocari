@@ -4,7 +4,7 @@ Stage 1 only needs OverlayConfig; other sections are added in later stages.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 import json
 
@@ -12,6 +12,17 @@ from vocari.paths import app_root
 
 PROJECT_ROOT = app_root()
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
+
+
+def _merge_section(section_cls, saved: dict):
+    """Builds a config section from its defaults overlaid with whatever was
+    saved, dropping any saved key that isn't a field on the dataclass anymore
+    — otherwise loading an older config.json after a field is renamed/removed
+    (e.g. render.use_gpu) would crash with an unexpected-keyword TypeError
+    instead of just ignoring the stale key."""
+    known = {f.name for f in fields(section_cls)}
+    merged = {**asdict(section_cls()), **{k: v for k, v in saved.items() if k in known}}
+    return section_cls(**merged)
 
 
 @dataclass
@@ -29,14 +40,16 @@ class OverlayConfig:
     # Pick a random bundled model per message instead of always using
     # model_path. Different avatars can then share the stage at once.
     random_model: bool = False
+    # Which model names are eligible when random_model is on — a model with
+    # an unchecked box in Settings → Модель never gets picked. Empty means
+    # "everyone eligible" (the default, and also what an unchecked-everyone
+    # state falls back to, since a pool nobody can be drawn from isn't a
+    # useful configuration).
+    random_pool: list[str] = field(default_factory=list)
 
 
 @dataclass
 class RenderConfig:
-    # Тумблер в настройках (Этап 4): рендерить аватар на GPU (OpenGL/RTX) или
-    # программно на CPU. Сама GPU-ветка рендера будет реализована вместе с UI
-    # настроек — пока переключатель хранится в конфиге и по умолчанию выключен.
-    use_gpu: bool = False
     # Лёгкое процедурное покачивание (ахоге/причёска) и подпрыгивание тела во
     # время речи. Тумблер "Покачивание" в настройках выключает оба эффекта разом.
     enable_sway: bool = True
@@ -81,7 +94,10 @@ class BubbleConfig:
     offset_x: int = 0  # extra nudge in canvas px, on top of `position`
     offset_y: int = 0
 
-    background_color: str = "#f7f7fbf0"  # #RRGGBBAA — alpha keeps it readable over anything
+    # 8-digit hex colours here are Qt's own #AARRGGBB (alpha first — see
+    # QColor::NameFormat.HexArgb, what ColorButton reads/writes), not the
+    # #RRGGBBAA order the name might suggest.
+    background_color: str = "#f0f7f7fb"  # near-white, ~94% opaque
     border_color: str = "#2b2b33"
     # Overall backdrop transparency, 0..100 (%). Multiplies the fill/outline
     # alpha; the text itself stays fully opaque so it never becomes unreadable.
@@ -90,12 +106,19 @@ class BubbleConfig:
     text_color: str = "#16161a"
     text_font: str = "Cascadia Code"
     text_size: int = 46
+    # Outline drawn behind the fill so the text stays legible over any
+    # backdrop colour/image — 0 width disables it. Sizes are canvas px, same
+    # space as text_size.
+    text_stroke_color: str = "#a8000000"  # black, ~66% opaque
+    text_stroke_width: int = 3
 
     nick_color: str = "#00d0d0"
     nick_font: str = "Segoe UI Black"
     nick_size: int = 70
     nick_bold: bool = True
     nick_italic: bool = False
+    nick_stroke_color: str = "#a8000000"
+    nick_stroke_width: int = 3
 
 
 @dataclass
@@ -156,12 +179,12 @@ class AppConfig:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError):
             return cls()
-        overlay = OverlayConfig(**{**asdict(OverlayConfig()), **data.get("overlay", {})})
-        render = RenderConfig(**{**asdict(RenderConfig()), **data.get("render", {})})
-        tts = TTSConfig(**{**asdict(TTSConfig()), **data.get("tts", {})})
-        twitch = TwitchConfig(**{**asdict(TwitchConfig()), **data.get("twitch", {})})
-        hotkey = HotkeyConfig(**{**asdict(HotkeyConfig()), **data.get("hotkey", {})})
-        bubble = BubbleConfig(**{**asdict(BubbleConfig()), **data.get("bubble", {})})
+        overlay = _merge_section(OverlayConfig, data.get("overlay", {}))
+        render = _merge_section(RenderConfig, data.get("render", {}))
+        tts = _merge_section(TTSConfig, data.get("tts", {}))
+        twitch = _merge_section(TwitchConfig, data.get("twitch", {}))
+        hotkey = _merge_section(HotkeyConfig, data.get("hotkey", {}))
+        bubble = _merge_section(BubbleConfig, data.get("bubble", {}))
         return cls(
             overlay=overlay, render=render, tts=tts, twitch=twitch, hotkey=hotkey, bubble=bubble
         )

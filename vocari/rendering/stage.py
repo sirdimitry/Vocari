@@ -82,7 +82,7 @@ class AvatarInstance:
     # each rolls its own offset when created, independent of how many others
     # are around.
     motion_phase_offset: float = field(default_factory=lambda: random.uniform(0.0, 2 * math.pi))
-    # Wandering gaze (see AvatarModel.eye_dart): current/target offset applied
+    # Wandering gaze (see AvatarModel.gaze_layer): current/target offset applied
     # to the whole eye layer, plus a countdown to the next glance so each
     # instance drifts on its own schedule instead of in lockstep.
     eye_look: tuple[float, float] = (0.0, 0.0)
@@ -266,13 +266,26 @@ class Stage:
         Mirrors to the *opposite* of _base_mirrored: entering/speaking used
         whichever orientation matches the entrance-side travel direction, so
         leaving — which travels the same corridor in reverse — needs the
-        other one."""
+        other one.
+
+        If this was the speaker, the next waiter is promoted right away
+        instead of waiting for this one to finish sliding fully off-screen —
+        so the handoff overlaps (next one advancing while this one leaves)
+        instead of running back-to-back, which used to add a second silent,
+        motionless stretch (~exit duration) on top of whatever synthesis
+        latency the promoted speaker already needs before it can talk."""
         inst = self.get(instance_id)
         if inst is None:
             return
         inst.mirrored = not self._base_mirrored
         inst.phase = "exiting"
         inst.target_x_offset = self._exit_x_offset
+
+        if inst.slot == SPEAKER_SLOT:
+            self._occupied_slots.discard(SPEAKER_SLOT)
+            self._promote_next()
+            if self._on_slot_freed:
+                self._on_slot_freed()
 
     def _promote_next(self) -> None:
         """The whole queue steps forward: the front waiter takes the speaking

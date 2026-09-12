@@ -84,6 +84,15 @@ class SwaySpec:
     degrees: float | None = None
     period: float | None = None
     pivot: str = "bottom"  # bottom | top | center — which end is attached
+    # Name of another sway layer to ride along with: shares that layer's
+    # pivot point and rotation phase instead of auto-detecting its own, so a
+    # small decoration riding on a swinging part (e.g. the glow dot at an
+    # antenna's tip) rotates around the antenna's own base and stays glued
+    # to it, rather than wobbling around its own (tiny, unrelated) bounding
+    # box. Set `degrees`/`period` to match the ridden-along layer's for them
+    # to move in perfect sync. That layer must appear earlier in the
+    # manifest's sway_layers list.
+    pivot_ref: str | None = None
 
 
 @dataclass
@@ -164,6 +173,7 @@ def load_model(directory: Path) -> AvatarModel:
                 degrees=entry.get("degrees"),
                 period=entry.get("period"),
                 pivot=entry.get("pivot", "bottom"),
+                pivot_ref=entry.get("pivot_ref"),
             ))
 
     effects: list[EffectSpec] = []

@@ -447,6 +447,10 @@ MANIFEST = {
     },
     "sway_layers": [
         {"file": "16Antenna.png", "degrees": 10, "period": 1.6, "pivot": "bottom"},
+        # Rides along with the antenna (same pivot + phase, same degrees/
+        # period) so the tip glow stays glued to the rod's actual tip
+        # instead of sitting still while the rod swings under it.
+        {"file": "18Emitter.png", "degrees": 10, "period": 1.6, "pivot_ref": "16Antenna.png"},
     ],
     "bounce_react_layers": ["03Ear_Right.png", "12Ear_Left.png"],
     "effect_layers": [

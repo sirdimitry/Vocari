@@ -49,6 +49,7 @@ class SettingsWindow(QWidget):
         on_exit_speed_changed: Callable[[int], None],
         on_model_selected: Callable[[str], None],
         on_random_model_toggled: Callable[[bool], None],
+        on_random_pool_changed: Callable[[list[str]], None],
         on_skip_hotkey_changed: Callable[[str], bool],
         on_bubble_changed: Callable[[], None],
         tts_providers: dict[str, TTSProvider],
@@ -74,7 +75,7 @@ class SettingsWindow(QWidget):
         self.model_tab = ModelTab(
             config, model, on_model_imported, on_position_changed, on_scale_changed,
             on_entrance_side_toggled, on_exit_speed_changed,
-            on_model_selected, on_random_model_toggled, tts_queue,
+            on_model_selected, on_random_model_toggled, on_random_pool_changed, tts_queue,
         )
         # The model tab lays itself out in two columns, so it gets the full
         # window width; the single-column tabs stay within a readable measure.

@@ -53,6 +53,7 @@ class ModelTab(QWidget):
         on_exit_speed_changed: Callable[[int], None],
         on_model_selected: Callable[[str], None],
         on_random_model_toggled: Callable[[bool], None],
+        on_random_pool_changed: Callable[[list[str]], None],
         tts_queue: TTSQueue,
     ):
         super().__init__()
@@ -64,7 +65,9 @@ class ModelTab(QWidget):
         self.on_exit_speed_changed = on_exit_speed_changed
         self.on_model_selected = on_model_selected
         self.on_random_model_toggled = on_random_model_toggled
+        self.on_random_pool_changed = on_random_pool_changed
         self.tts_queue = tts_queue
+        self.pool_checks: dict[str, QCheckBox] = {}
 
         # Two columns: the screen preview (the thing you actually aim with)
         # on the left, the numbers that describe it on the right, so dragging
@@ -89,11 +92,16 @@ class ModelTab(QWidget):
         box = QGroupBox("Модель")
         layout = QVBoxLayout(box)
 
+        model_names = [
+            folder.name
+            for folder in (sorted(MODELS_ROOT.iterdir()) if MODELS_ROOT.exists() else [])
+            if (folder / "model.json").exists()
+        ]
+
         picker = QFormLayout()
         self.model_combo = QComboBox()
-        for folder in sorted(MODELS_ROOT.iterdir()) if MODELS_ROOT.exists() else []:
-            if (folder / "model.json").exists():
-                self.model_combo.addItem(folder.name, f"assets/models/{folder.name}")
+        for name in model_names:
+            self.model_combo.addItem(name, f"assets/models/{name}")
         index = self.model_combo.findData(self.config.overlay.model_path)
         self.model_combo.setCurrentIndex(max(0, index))
         self.model_combo.currentIndexChanged.connect(self._on_model_selected)
@@ -107,12 +115,33 @@ class ModelTab(QWidget):
 
         random_hint = QLabel(
             "Когда включено, выбор выше игнорируется: для каждого сообщения "
-            "берётся случайный аватар из списка, так что в очереди одновременно "
-            "могут стоять разные персонажи."
+            "берётся случайный аватар из отмеченных ниже, так что в очереди "
+            "одновременно могут стоять разные персонажи."
         )
         random_hint.setWordWrap(True)
         random_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(random_hint)
+
+        pool_row = QHBoxLayout()
+        pool_row.addWidget(QLabel("Участвуют в случайном выборе:"))
+        pool_row.addStretch()
+        for name in model_names:
+            check = QCheckBox(name)
+            check.setChecked(not self.config.overlay.random_pool or name in self.config.overlay.random_pool)
+            check.toggled.connect(self._on_pool_check_toggled)
+            self.pool_checks[name] = check
+            pool_row.addWidget(check)
+        layout.addLayout(pool_row)
+
+        pool_hint = QLabel(
+            "Если ничего не отмечено — участвуют все. Список читается моделью "
+            "один раз при запуске настроек, так что папку с новой моделью надо "
+            "сначала импортировать (или добавить в assets/models вручную) и "
+            "переоткрыть настройки, чтобы она здесь появилась."
+        )
+        pool_hint.setWordWrap(True)
+        pool_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(pool_hint)
 
         self.current_label = QLabel(f"Текущая модель: {self.config.overlay.model_path}")
         layout.addWidget(self.current_label)
@@ -342,6 +371,12 @@ class ModelTab(QWidget):
         self.config.save()
         self.model_combo.setEnabled(not checked)
         self.on_random_model_toggled(checked)
+
+    def _on_pool_check_toggled(self) -> None:
+        checked = [name for name, check in self.pool_checks.items() if check.isChecked()]
+        self.config.overlay.random_pool = checked
+        self.config.save()
+        self.on_random_pool_changed(checked)
 
     def _on_test_clicked(self) -> None:
         text = random_poem()

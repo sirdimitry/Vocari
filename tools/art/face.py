@@ -258,7 +258,7 @@ def eye_socket_open(layer: Layer, spec: EyeSpec) -> str:
 def eye_iris(layer: Layer, spec: EyeSpec) -> str:
     """Just the iris/pupil/catchlights, drawn at spec's neutral position - the
     layer this produces is meant to sit *underneath* eye_socket_open() in the
-    z-order and be the one the renderer's eye_dart nudges left/right, so the
+    z-order and be the one the renderer's gaze_layer nudges left/right, so the
     lids and sclera stay put while the gaze wanders (a "nervous" look)."""
     g = layer.sub()
     cx, cy = spec.cx, spec.cy

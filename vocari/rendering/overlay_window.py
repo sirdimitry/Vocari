@@ -150,14 +150,31 @@ class ModelPack:
         }
         sway_pivot: dict[str, tuple[float, float]] = {}
         sway_spec: dict[str, SwaySpec] = {}
-        for spec in model.sway:
+        sway_phase: dict[str, float] = {}
+        # Two passes: entries that ride along with another layer (pivot_ref)
+        # need that layer's own pivot/phase already resolved, and the
+        # manifest doesn't have to list them in a particular order for that
+        # to work.
+        pending: list[SwaySpec] = []
+        for i, spec in enumerate(model.sway):
             filename = spec.file
             if filename not in pixmaps:
+                continue
+            if spec.pivot_ref:
+                pending.append(spec)
                 continue
             pivot = _sway_pivot(pixmaps[filename], spec.pivot)
             if pivot is not None:
                 sway_pivot[filename] = pivot
                 sway_spec[filename] = spec
+                sway_phase[filename] = i * 0.9
+        for spec in pending:
+            ref_pivot = sway_pivot.get(spec.pivot_ref)
+            if ref_pivot is None:
+                continue  # the referenced layer had no opaque pixels either
+            sway_pivot[spec.file] = ref_pivot
+            sway_spec[spec.file] = spec
+            sway_phase[spec.file] = sway_phase.get(spec.pivot_ref, 0.0)
 
         center_x = model.canvas_size[0] / 2
         bounce_pivot: dict[str, tuple[float, float]] = {}
@@ -180,7 +197,7 @@ class ModelPack:
             model=model,
             pixmaps=pixmaps,
             z_order=model.build_z_order(),
-            sway_phase={name: i * 0.9 for i, name in enumerate(sway_pivot)},
+            sway_phase=sway_phase,
             sway_pivot=sway_pivot,
             sway_spec=sway_spec,
             bounce_pivot=bounce_pivot,
@@ -225,6 +242,7 @@ class OverlayWindow(QWidget):
         # mode adds the rest lazily via set_available_models().
         self._packs: dict[str, ModelPack] = {model.name: ModelPack.build(model)}
         self.random_model = False
+        self._random_pool: list[str] = []
         self._drag_offset: QPoint | None = None
         self.stage = Stage(
             canvas_width=model.canvas_size[0],
@@ -399,9 +417,18 @@ class OverlayWindow(QWidget):
     def set_random_model(self, enabled: bool) -> None:
         self.random_model = enabled
 
+    def set_random_pool(self, names: list[str]) -> None:
+        """Restricts random mode to these model names (Settings → Модель's
+        per-model checkboxes). Empty = everyone eligible — including as the
+        fallback if every box got unchecked, since a pool nobody can be
+        drawn from would just make random mode draw nothing."""
+        self._random_pool = list(names)
+
     def _pick_model_name(self) -> str:
         if self.random_model and len(self._packs) > 1:
-            return random.choice(list(self._packs))
+            pool = [name for name in self._packs if name in self._random_pool] if self._random_pool else list(self._packs)
+            if pool:
+                return random.choice(pool)
         return self.model.name
 
     def show_bubble_preview(self, text: str, author: str) -> None:
@@ -715,12 +742,14 @@ class OverlayWindow(QWidget):
 
             if effect_spec is not None and effect_spec.effect in ("emit", "drip"):
                 self._paint_effect_echoes(painter, pack, ref, pixmap, effect_spec,
-                                          self._clock_s + inst.motion_phase_offset)
+                                          self._clock_s + inst.motion_phase_offset,
+                                          pivot, angle if pivot is not None else 0.0)
 
         painter.restore()
 
     def _paint_effect_echoes(self, painter: QPainter, pack: "ModelPack", ref: str,
-                             pixmap: QPixmap, spec: "EffectSpec", t: float) -> None:
+                             pixmap: QPixmap, spec: "EffectSpec", t: float,
+                             pivot: tuple[float, float] | None = None, angle: float = 0.0) -> None:
         """Repeating echoes of the source pixmap, evenly spaced across one
         period so they read as a continuous stream rather than one instance
         popping in and out.
@@ -728,12 +757,22 @@ class OverlayWindow(QWidget):
         "emit" grows the echo outward from its own center and fades it —
         a radio-wave / radar-ping look, e.g. a signal spreading from an
         antenna tip. "drip" instead slides the echo straight down while
-        fading, e.g. a droplet detaching and falling from a drool strand."""
+        fading, e.g. a droplet detaching and falling from a drool strand.
+
+        `pivot`/`angle`: if the source layer is itself swaying (e.g. an
+        antenna), the echoes need the same rotation applied or they'd stay
+        anchored to the source's neutral, unrotated position while the
+        source itself visibly swings away from it."""
         origin = pack.effect_origin.get(ref)
         if origin is None:
             return
         ox, oy = origin
         canvas_h = pack.model.canvas_size[1]
+        painter.save()
+        if pivot is not None and angle:
+            painter.translate(pivot[0], pivot[1])
+            painter.rotate(angle)
+            painter.translate(-pivot[0], -pivot[1])
         for i in range(spec.copies):
             phase = ((t / spec.period) + i / spec.copies) % 1.0
             fade = max(0.0, 1.0 - phase) * spec.max_opacity
@@ -754,6 +793,7 @@ class OverlayWindow(QWidget):
                 painter.translate(-ox, -oy)
             painter.drawPixmap(0, 0, pixmap)
             painter.restore()
+        painter.restore()
 
     def _resolve_layer(self, pack: ModelPack, kind: str, ref: str,
                        active_frame: dict[str, str]) -> QPixmap | None:

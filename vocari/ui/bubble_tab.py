@@ -255,6 +255,17 @@ class BubbleTab(QWidget):
         )
         form.addRow("Цвет сообщения:", self.text_color)
 
+        self.text_stroke_color = ColorButton(
+            self.config.bubble.text_stroke_color, lambda c: self._set("text_stroke_color", c)
+        )
+        form.addRow("Цвет обводки сообщения:", self.text_stroke_color)
+
+        self.text_stroke_width = QSpinBox()
+        self.text_stroke_width.setRange(0, 20)
+        self.text_stroke_width.setValue(self.config.bubble.text_stroke_width)
+        self.text_stroke_width.valueChanged.connect(lambda v: self._set("text_stroke_width", v))
+        form.addRow("Толщина обводки сообщения:", self.text_stroke_width)
+
         self.nick_font = QFontComboBox()
         self.nick_font.setCurrentFont(self.config.bubble.nick_font)
         self.nick_font.currentFontChanged.connect(
@@ -272,6 +283,17 @@ class BubbleTab(QWidget):
             self.config.bubble.nick_color, lambda c: self._set("nick_color", c)
         )
         form.addRow("Цвет ника:", self.nick_color)
+
+        self.nick_stroke_color = ColorButton(
+            self.config.bubble.nick_stroke_color, lambda c: self._set("nick_stroke_color", c)
+        )
+        form.addRow("Цвет обводки ника:", self.nick_stroke_color)
+
+        self.nick_stroke_width = QSpinBox()
+        self.nick_stroke_width.setRange(0, 20)
+        self.nick_stroke_width.setValue(self.config.bubble.nick_stroke_width)
+        self.nick_stroke_width.valueChanged.connect(lambda v: self._set("nick_stroke_width", v))
+        form.addRow("Толщина обводки ника:", self.nick_stroke_width)
 
         style_row = QHBoxLayout()
         self.nick_bold = QCheckBox("Жирный")
@@ -291,8 +313,9 @@ class BubbleTab(QWidget):
         hint = QLabel(
             "Размеры заданы в пикселях холста модели, а не экрана — поэтому текст "
             "масштабируется вместе с аватаром и не приходится подбирать его заново "
-            "после изменения масштаба оверлея. У текста есть тонкая контурная "
-            "подсветка, чтобы он читался даже поверх пёстрого фона."
+            "после изменения масштаба оверлея. Обводка (цвет и толщина, отдельно "
+            "для сообщения и для ника) помогает тексту читаться даже поверх "
+            "пёстрого фона — толщина 0 отключает её."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")

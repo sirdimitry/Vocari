@@ -123,6 +123,7 @@ def main() -> None:
             logger.exception("Не удалось загрузить модель из %s", folder)
     window.set_available_models(available)
     window.set_random_model(config.overlay.random_model)
+    window.set_random_pool(config.overlay.random_pool)
     logger.info("Доступные модели: %s", ", ".join(m.name for m in available) or "—")
     window.show()
 
@@ -139,6 +140,10 @@ def main() -> None:
     def on_random_model_toggled(enabled: bool) -> None:
         window.set_random_model(enabled)
         logger.info("Случайный аватар: %s", "включён" if enabled else "выключен")
+
+    def on_random_pool_changed(names: list[str]) -> None:
+        window.set_random_pool(names)
+        logger.info("Участвуют в случайном выборе: %s", ", ".join(names) or "все")
 
     def on_model_imported(model_dir: Path) -> None:
         try:
@@ -209,6 +214,7 @@ def main() -> None:
         window.stage.set_exit_speed,
         on_model_selected,
         on_random_model_toggled,
+        on_random_pool_changed,
         on_skip_hotkey_changed,
         window.apply_bubble_settings,
         tts_providers,
