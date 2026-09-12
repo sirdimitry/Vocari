@@ -27,8 +27,6 @@ from vocari.logging_setup import get_logger
 from vocari.paths import app_root
 from vocari.rendering.model import AvatarModel
 from vocari.rendering.model_import import import_model_from_folder
-from vocari.tts.poems import random_poem
-from vocari.tts.tts_queue import TTSQueue
 from vocari.ui.screen_preview import ScreenPreviewWidget
 from vocari.ui.widgets import ToggleSwitch
 
@@ -54,7 +52,6 @@ class ModelTab(QWidget):
         on_model_selected: Callable[[str], None],
         on_random_model_toggled: Callable[[bool], None],
         on_random_pool_changed: Callable[[list[str]], None],
-        tts_queue: TTSQueue,
     ):
         super().__init__()
         self.config = config
@@ -66,7 +63,6 @@ class ModelTab(QWidget):
         self.on_model_selected = on_model_selected
         self.on_random_model_toggled = on_random_model_toggled
         self.on_random_pool_changed = on_random_pool_changed
-        self.tts_queue = tts_queue
         self.pool_checks: dict[str, QCheckBox] = {}
 
         # Two columns: the screen preview (the thing you actually aim with)
@@ -83,7 +79,6 @@ class ModelTab(QWidget):
         root.addLayout(columns)
 
         root.addWidget(self._build_timing_group())
-        root.addWidget(self._build_test_group())
         root.addStretch()
 
     # -- sections ---------------------------------------------------------
@@ -264,28 +259,6 @@ class ModelTab(QWidget):
         layout.addWidget(timing_hint)
         return box
 
-    def _build_test_group(self) -> QGroupBox:
-        box = QGroupBox("Проверка очереди")
-        layout = QVBoxLayout(box)
-
-        test_row = QHBoxLayout()
-        self.test_button = QPushButton("Тест (случайный стишок)")
-        self.test_button.clicked.connect(self._on_test_clicked)
-        test_row.addWidget(self.test_button)
-        test_row.addStretch()
-        layout.addLayout(test_row)
-
-        test_hint = QLabel(
-            "Каждое нажатие добавляет в очередь случайный четырёхстрочный стишок "
-            "(на английском или русском) — жмите несколько раз подряд, чтобы "
-            "увидеть на реальном оверлее, как аватары выстраиваются в очередь и "
-            "сменяют друг друга (до 7 одновременно)."
-        )
-        test_hint.setWordWrap(True)
-        test_hint.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(test_hint)
-        return box
-
     def _make_slider(
         self,
         minimum: int,
@@ -377,11 +350,6 @@ class ModelTab(QWidget):
         self.config.overlay.random_pool = checked
         self.config.save()
         self.on_random_pool_changed(checked)
-
-    def _on_test_clicked(self) -> None:
-        text = random_poem()
-        self.tts_queue.enqueue(text)
-        logger.info("Тест (стишок): '%s'", text)
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Папка с PNG-слоями модели")

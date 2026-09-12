@@ -78,14 +78,28 @@ class AudioPlayer(QObject):
     ) -> None:
         """volume: 0.0-1.5 linear gain applied before playback. The three
         on_* callbacks target whichever avatar instance is speaking this
-        line — fresh per call, since only one thing plays at a time."""
-        data, samplerate = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=False)
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        if volume != 1.0:
-            data = np.clip(data * volume, -1.0, 1.0)
+        line — fresh per call, since only one thing plays at a time.
 
+        Decoding/device errors are caught rather than left to propagate: this
+        runs from inside a deferred QTimer callback with no caller to catch
+        anything, so an uncaught exception here used to leave the avatar
+        stuck on stage forever — bubble up, mouth shut, nothing ever
+        retiring it, since on_finished (the only thing that eventually calls
+        retire) would simply never fire. Treating a failed start as an
+        immediate finish keeps that from stalling the queue."""
         self.stop()  # cancel any playback already in progress
+        try:
+            data, samplerate = sf.read(io.BytesIO(audio_bytes), dtype="float32", always_2d=False)
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if volume != 1.0:
+                data = np.clip(data * volume, -1.0, 1.0)
+            sd.play(data, samplerate)
+        except Exception:
+            logger.exception("Не удалось начать воспроизведение — считаю фразу законченной")
+            on_finished()
+            return
+
         self._on_mouth_state = on_mouth_state
         self._on_talking = on_talking
         self._on_audio_level = on_audio_level
@@ -94,7 +108,6 @@ class AudioPlayer(QObject):
         self._on_finished = on_finished
         self._envelope = 0.0
 
-        sd.play(data, samplerate)
         self._start_time = time.monotonic()
         self._on_talking(True)
         self._on_mouth_state(False)

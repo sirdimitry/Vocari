@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QTimer
 
@@ -52,9 +53,19 @@ class TTSQueue(QObject):
         # adding on top of it.
         self._speaker_arrived_at = 0.0
         self._deferred_timers: list[QTimer] = []
+        # Settings → Облачко's "Держать облачко на экране для настройки"
+        # parks a non-speaking preview in the speaking slot indefinitely.
+        # enqueue() below auto-dismisses it so a real message is never stuck
+        # waiting behind it forever; this lets the settings UI know that
+        # happened so its toggle button can un-check itself instead of
+        # silently going stale.
+        self._on_preview_dismissed: Callable[[], None] | None = None
 
         window.stage.on_speaker_ready(self._on_speaker_ready)
         window.stage.on_slot_freed(self._on_slot_freed)
+
+    def set_on_preview_dismissed(self, callback: Callable[[], None]) -> None:
+        self._on_preview_dismissed = callback
 
     def _defer(self, delay_ms: int, callback) -> None:
         """QTimer.singleShot that can be cancelled by skip_current()."""
@@ -89,6 +100,17 @@ class TTSQueue(QObject):
         self.window.retire_speaker(speaker.id)
 
     def enqueue(self, text: str, author: str = "") -> None:
+        # The bubble-settings preview parks an instance in the speaking slot
+        # with no synthesis and no auto-exit — if it's still up (the user
+        # left "Держать облачко на экране" checked), a real message would
+        # otherwise queue up behind it and simply never get its turn, which
+        # reads as "the test button doesn't do anything" or "it's stuck".
+        if self.window.has_bubble_preview():
+            self.window.hide_bubble_preview()
+            logger.info("TTS-очередь: снял превью облачка, чтобы освободить место для реального сообщения")
+            if self._on_preview_dismissed:
+                self._on_preview_dismissed()
+
         inst = self.window.add_speaker(text, author)
         if inst is None:
             self._backlog.append((text, author))

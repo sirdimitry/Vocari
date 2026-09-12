@@ -100,6 +100,13 @@ class BubbleTab(QWidget):
         root.addWidget(self._build_placement_group())
         root.addStretch()
 
+        # A real message (test button or actual chat) auto-dismisses a
+        # preview left parked on stage — see TTSQueue.enqueue(). Keep this
+        # button's own checked state/label in sync when that happens instead
+        # of leaving it saying "Убрать облачко" for a preview that's already
+        # gone.
+        self.tts_queue.set_on_preview_dismissed(lambda: self.preview_button.setChecked(False))
+
     # -- sections ---------------------------------------------------------
 
     def _build_test_group(self) -> QGroupBox:
