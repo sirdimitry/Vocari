@@ -37,6 +37,16 @@ class RenderTab(QWidget):
         top_row.addWidget(self.always_on_top_toggle)
         layout.addLayout(top_row)
 
+        obs_note = QLabel(
+            "Как захватить в OBS: источник «Захват окна» → окно «Vocari - …» → "
+            "в поле «Метод захвата» обязательно выбрать «Windows 10 (1903 и новее)». "
+            "Метод BitBlt (и часто «Автоматически») не умеет захватывать окна с "
+            "прозрачностью — источник будет пустым."
+        )
+        obs_note.setWordWrap(True)
+        obs_note.setStyleSheet("color: #e6c229; font-size: 11px;")
+        layout.addWidget(obs_note)
+
         top_note = QLabel(
             "Выключите, чтобы можно было открыть игру или другое приложение "
             "поверх аватара на своём экране. OBS Window Capture захватывает "

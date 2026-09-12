@@ -132,7 +132,10 @@ def main() -> None:
     if config.hotkey.skip_message:
         if not hotkey_manager.set_binding(config.hotkey.skip_message):
             logger.warning("Не удалось зарегистрировать сохранённый хоткей пропуска: %s", config.hotkey.skip_message)
-    hotkey_manager.triggered.connect(audio_player.skip)
+    # skip_current (not audio_player.skip): the hotkey has to interrupt the
+    # speaker whatever it's doing — mid-word, waiting on synthesis, or still
+    # sliding in — and send it off stage with the normal exit animation.
+    hotkey_manager.triggered.connect(tts_queue.skip_current)
 
     def on_skip_hotkey_changed(sequence_text: str) -> bool:
         ok = hotkey_manager.set_binding(sequence_text)
@@ -177,6 +180,7 @@ def main() -> None:
         window.set_position,
         window.set_scale,
         window.set_entrance_from_right,
+        window.stage.set_exit_speed,
         on_skip_hotkey_changed,
         tts_providers,
         tts_queue,

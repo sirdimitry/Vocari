@@ -9,6 +9,7 @@ fully exited, so speaker_ready can't fire for two instances concurrently.
 """
 from __future__ import annotations
 
+import time
 from collections import deque
 
 from PySide6.QtCore import QObject, QThread, QTimer
@@ -16,7 +17,6 @@ from PySide6.QtCore import QObject, QThread, QTimer
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering.overlay_window import OverlayWindow
-from vocari.rendering.stage import POST_SPEECH_HOLD_MS
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
 from vocari.tts.registry import get_active_provider
@@ -46,9 +46,46 @@ class TTSQueue(QObject):
         self._thread: QThread | None = None
         self._worker: SynthesisWorker | None = None
         self._pending_instance_id = 0
+        # When the current speaker arrived in the slot — the pre-speech pause
+        # is measured from here, so slow synthesis eats into it instead of
+        # adding on top of it.
+        self._speaker_arrived_at = 0.0
+        self._deferred_timers: list[QTimer] = []
 
         window.stage.on_speaker_ready(self._on_speaker_ready)
         window.stage.on_slot_freed(self._on_slot_freed)
+
+    def _defer(self, delay_ms: int, callback) -> None:
+        """QTimer.singleShot that can be cancelled by skip_current()."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def fire() -> None:
+            self._deferred_timers.remove(timer)
+            callback()
+
+        timer.timeout.connect(fire)
+        self._deferred_timers.append(timer)
+        timer.start(delay_ms)
+
+    def _cancel_deferred(self) -> None:
+        for timer in self._deferred_timers:
+            timer.stop()
+        self._deferred_timers.clear()
+
+    def skip_current(self) -> None:
+        """Skip hotkey: drop whatever the current speaker is doing — talking
+        mid-word, waiting on synthesis, or still sliding in — and send it
+        straight off stage with the normal mirror-and-leave animation, rather
+        than letting it vanish or hang around."""
+        speaker = next((i for i in self.window.stage.instances if i.slot == 0), None)
+        if speaker is None or speaker.phase == "exiting":
+            return
+
+        self._cancel_deferred()  # a pending playback start or post-speech hold
+        self.audio_player.stop()  # silent, and unlike skip() it won't re-trigger on_finished
+        logger.info("Пропуск фразы по хоткею: '%s' (id=%d)", speaker.text, speaker.id)
+        self.window.retire_speaker(speaker.id)
 
     def enqueue(self, text: str) -> None:
         inst = self.window.add_speaker(text)
@@ -66,6 +103,16 @@ class TTSQueue(QObject):
             self.enqueue(text)
 
     def _on_speaker_ready(self, instance_id: int) -> None:
+        try:
+            self._start_synthesis(instance_id)
+        except Exception:
+            # This runs inside Stage.tick(); letting anything escape would
+            # break the animation tick and leave the avatar stuck on stage
+            # forever. Log it and send this one off instead.
+            logger.exception("TTS-очередь: не удалось запустить синтез (id=%d)", instance_id)
+            self.window.retire_speaker(instance_id)
+
+    def _start_synthesis(self, instance_id: int) -> None:
         inst = self.window.stage.get(instance_id)
         if inst is None:
             return
@@ -81,6 +128,7 @@ class TTSQueue(QObject):
         # capture it in a per-call lambda — see the note on the connect()
         # below for why that matters.
         self._pending_instance_id = instance_id
+        self._speaker_arrived_at = time.monotonic()
 
         self._thread = QThread(self)
         self._worker = SynthesisWorker(provider, text, voice, lang, rate)
@@ -103,7 +151,18 @@ class TTSQueue(QObject):
     def _on_synthesized_slot(self, audio: bytes, error: str) -> None:
         self._on_synthesized(self._pending_instance_id, audio, error)
 
+    def _is_stale(self, instance_id: int) -> bool:
+        """True once this instance is gone or already heading off stage —
+        i.e. the skip hotkey got to it while synthesis was still in flight on
+        a worker thread (which can't be aborted mid-request), so whatever
+        comes back should simply be dropped."""
+        inst = self.window.stage.get(instance_id)
+        return inst is None or inst.phase == "exiting"
+
     def _on_synthesized(self, instance_id: int, audio: bytes, error: str) -> None:
+        if self._is_stale(instance_id):
+            return
+
         if error:
             inst = self.window.stage.get(instance_id)
             text = inst.text if inst is not None else "?"
@@ -114,6 +173,16 @@ class TTSQueue(QObject):
             self.window.retire_speaker(instance_id)
             return
 
+        # Hold the pose for the configured beat before speaking — measured
+        # from arrival, so synthesis time counts toward it rather than being
+        # added to it (fast synthesis waits, slow synthesis starts at once).
+        elapsed_ms = (time.monotonic() - self._speaker_arrived_at) * 1000
+        remaining_ms = max(0, round(self.config.render.pre_speech_delay_ms - elapsed_ms))
+        self._defer(remaining_ms, lambda: self._start_playback(instance_id, audio))
+
+    def _start_playback(self, instance_id: int, audio: bytes) -> None:
+        if self._is_stale(instance_id):
+            return
         volume_gain = max(0.0, 1.0 + self.config.tts.volume_percent / 100.0)
         self.audio_player.play(
             audio,
@@ -125,4 +194,7 @@ class TTSQueue(QObject):
         )
 
     def _retire_after_hold(self, instance_id: int) -> None:
-        QTimer.singleShot(POST_SPEECH_HOLD_MS, lambda: self.window.retire_speaker(instance_id))
+        self._defer(
+            self.config.render.post_speech_hold_ms,
+            lambda: self.window.retire_speaker(instance_id),
+        )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -45,6 +47,7 @@ class ModelTab(QWidget):
         on_position_changed: Callable[[int, int], None],
         on_scale_changed: Callable[[float], None],
         on_entrance_side_toggled: Callable[[bool], None],
+        on_exit_speed_changed: Callable[[int], None],
         tts_queue: TTSQueue,
     ):
         super().__init__()
@@ -53,6 +56,7 @@ class ModelTab(QWidget):
         self.on_position_changed = on_position_changed
         self.on_scale_changed = on_scale_changed
         self.on_entrance_side_toggled = on_entrance_side_toggled
+        self.on_exit_speed_changed = on_exit_speed_changed
         self.tts_queue = tts_queue
 
         layout = QVBoxLayout(self)
@@ -138,6 +142,37 @@ class ModelTab(QWidget):
         side_row.addWidget(self.entrance_side_toggle)
         layout.addLayout(side_row)
 
+        timing_label = QLabel("Тайминги выхода и ухода")
+        timing_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        layout.addWidget(timing_label)
+
+        timing_form = QFormLayout()
+        self.pre_delay_slider, pre_row = self._make_slider(
+            1, 50, round(config.render.pre_speech_delay_ms / 100), self._on_pre_delay_changed, " с", 10.0
+        )
+        timing_form.addRow("Пауза перед речью:", pre_row)
+
+        self.post_delay_slider, post_row = self._make_slider(
+            1, 50, round(config.render.post_speech_hold_ms / 100), self._on_post_delay_changed, " с", 10.0
+        )
+        timing_form.addRow("Пауза после речи:", post_row)
+
+        self.exit_speed_slider, exit_row = self._make_slider(
+            1, 100, config.render.exit_speed, self._on_exit_speed_changed, "", 1.0
+        )
+        timing_form.addRow("Скорость ухода:", exit_row)
+        layout.addLayout(timing_form)
+
+        timing_hint = QLabel(
+            "Пауза перед речью — сколько аватар стоит на месте, прежде чем начать "
+            "говорить (она же прикрывает задержку синтеза: если синтез дольше — "
+            "речь начнётся сразу, как будет готова). Скорость ухода: 1 — уезжает "
+            "медленно, 100 — исчезает мгновенно."
+        )
+        timing_hint.setWordWrap(True)
+        timing_hint.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(timing_hint)
+
         test_row = QHBoxLayout()
         self.test_button = QPushButton("Тест (случайный стишок)")
         self.test_button.clicked.connect(self._on_test_clicked)
@@ -156,6 +191,52 @@ class ModelTab(QWidget):
         layout.addWidget(test_hint)
 
         layout.addStretch()
+
+    def _make_slider(
+        self,
+        minimum: int,
+        maximum: int,
+        value: int,
+        on_changed: Callable[[int], None],
+        suffix: str,
+        divisor: float,
+    ) -> tuple[QSlider, QWidget]:
+        """Slider + live value readout. `divisor`/`suffix` are display-only —
+        the slider itself always works in whole steps (Qt sliders are
+        integer-only), e.g. 1..50 tenths of a second shown as "0.1 с".."5.0 с"."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setValue(value)
+        readout = QLabel()
+        readout.setMinimumWidth(48)
+
+        def render_value(raw: int) -> None:
+            shown = raw / divisor
+            readout.setText(f"{shown:.1f}{suffix}" if divisor != 1.0 else f"{shown:.0f}{suffix}")
+
+        render_value(value)
+        slider.valueChanged.connect(render_value)
+        slider.valueChanged.connect(on_changed)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(slider)
+        row_layout.addWidget(readout)
+        return slider, row
+
+    def _on_pre_delay_changed(self, tenths: int) -> None:
+        self.config.render.pre_speech_delay_ms = tenths * 100
+        self.config.save()
+
+    def _on_post_delay_changed(self, tenths: int) -> None:
+        self.config.render.post_speech_hold_ms = tenths * 100
+        self.config.save()
+
+    def _on_exit_speed_changed(self, speed: int) -> None:
+        self.config.render.exit_speed = speed
+        self.config.save()
+        self.on_exit_speed_changed(speed)
 
     def _apply_geometry(self) -> None:
         x, y = self.pos_x_spin.value(), self.pos_y_spin.value()

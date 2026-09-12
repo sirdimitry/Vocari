@@ -33,6 +33,7 @@ class SettingsWindow(QWidget):
         on_position_changed: Callable[[int, int], None],
         on_scale_changed: Callable[[float], None],
         on_entrance_side_toggled: Callable[[bool], None],
+        on_exit_speed_changed: Callable[[int], None],
         on_skip_hotkey_changed: Callable[[str], bool],
         tts_providers: dict[str, TTSProvider],
         tts_queue: TTSQueue,
@@ -49,7 +50,7 @@ class SettingsWindow(QWidget):
         )
         self.model_tab = ModelTab(
             config, model, on_model_imported, on_position_changed, on_scale_changed,
-            on_entrance_side_toggled, tts_queue,
+            on_entrance_side_toggled, on_exit_speed_changed, tts_queue,
         )
         tabs.addTab(self.model_tab, "Модель")
         tabs.addTab(TTSTab(config), "TTS")

@@ -47,6 +47,15 @@ class RenderConfig:
     # everyone jumps in and out on the left, matching the original spec;
     # True mirrors the whole stage layout to the right instead.
     entrance_from_right: bool = False
+    # How long the avatar stands in the speaking slot before the line starts,
+    # and how long it holds the pose afterwards (100..5000 ms each). The
+    # pre-speech pause doubles as cover for synthesis latency: if synthesis
+    # takes longer than this, playback starts as soon as the audio is ready.
+    pre_speech_delay_ms: int = 500
+    post_speech_hold_ms: int = 500
+    # How fast the avatar slides off stage, as an absolute 1..100 dial
+    # (1 = crawls off, 100 = gone in a single frame) — see stage.py.
+    exit_speed: int = 33
 
 
 @dataclass

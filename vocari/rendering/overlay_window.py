@@ -121,10 +121,17 @@ class OverlayWindow(QWidget):
         self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
         self._drag_offset: QPoint | None = None
         self.stage = Stage(
-            canvas_width=model.canvas_size[0], entrance_from_right=render_config.entrance_from_right
+            canvas_width=model.canvas_size[0],
+            entrance_from_right=render_config.entrance_from_right,
+            exit_speed=render_config.exit_speed,
         )
 
-        base_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        # Deliberately NOT Qt.WindowType.Tool: that sets WS_EX_TOOLWINDOW,
+        # which OBS filters out of its Window Capture source list entirely —
+        # the window becomes uncapturable, which defeats the whole point of
+        # the app. A plain frameless window shows up in the list (and in the
+        # taskbar/alt-tab, which is also how the user finds it again).
+        base_flags = Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
         self.setWindowFlags(
             base_flags | Qt.WindowType.WindowStaysOnTopHint
             if render_config.always_on_top
@@ -363,6 +370,16 @@ class OverlayWindow(QWidget):
     def _paint_instance(self, painter: QPainter, inst: AvatarInstance, canvas_w: int) -> None:
         painter.save()
         painter.translate(self.stage.draw_origin_x + inst.x_offset, 0)
+
+        # Perspective shrink for anyone further back in the queue, anchored
+        # to the bottom center so the whole queue keeps standing on the same
+        # floor line instead of shrinking toward the canvas's top-left.
+        slot_scale = self.stage.slot_scale(inst.slot)
+        if slot_scale != 1.0:
+            canvas_h = self.model.canvas_size[1]
+            painter.translate(canvas_w * (1 - slot_scale) / 2, canvas_h * (1 - slot_scale))
+            painter.scale(slot_scale, slot_scale)
+
         if inst.mirrored:
             painter.translate(canvas_w, 0)
             painter.scale(-1, 1)
