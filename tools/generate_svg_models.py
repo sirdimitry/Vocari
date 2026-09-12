@@ -1,11 +1,18 @@
 """Renders the bundled avatar models from the art modules in tools/art/.
 
 Each model module exports:
-  LAYERS    filename -> callable returning either a tools.art.svgkit.Layer
-            (rasterized through headless Chromium - see orc.py, ranger.py)
-            or a QImage already at the shared canvas size (the pixel-art
-            route - see coder_pixel.py, tools/art/pixel.py)
+  LAYERS    filename -> callable returning a tools.art.svgkit.Layer,
+            rasterized through headless Chromium (see orc.py, ranger.py)
   MANIFEST  the model.json payload (canvas is added here, fixed for all models)
+
+Coder is deliberately NOT registered here — it's the user's own hand-made
+layer pack (assets/models/Coder/*.png + model.json, committed as plain
+files, no generator module), not something this script can regenerate.
+There used to be a procedural tools/art/coder_pixel.py (and its shared
+tools/art/pixel.py low-res-grid toolkit) wired in here; both were removed
+once the hand-made pack replaced it, specifically so a future
+`generate_svg_models.py` run (with no name filter) can never again overwrite
+the user's real art with a procedural stand-in.
 
 Run:  .venv\\Scripts\\python.exe tools\\generate_svg_models.py [name ...]
       (no names = render every registered model)
@@ -28,7 +35,6 @@ OUT_ROOT = Path(__file__).resolve().parent.parent / "assets" / "models"
 MODELS: dict[str, str] = {
     "Orc": "tools.art.orc",
     "Ranger": "tools.art.ranger",
-    "Coder": "tools.art.coder_pixel",
 }
 
 

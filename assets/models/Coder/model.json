@@ -1,14 +1,19 @@
 {
   "name": "Coder",
+  "canvas": [1280, 1280],
   "base_layers": [
-    "01Back.png",
-    "17HairBack.png",
+    "01HairBehind.png",
     "02Body.png",
+    "03Ear_Right.png",
+    "04Hair_Right.png",
     "05Head.png",
     "08Brows.png",
-    "19EyeShine.png",
-    "13Goatee.png",
-    "18HairFront.png"
+    "13Hair_Detail_Down.png",
+    "14Hair_Detail_Up.png",
+    "11Hair_Left.png",
+    "12Ear_Left.png",
+    "15HairFrontSmall.png",
+    "16Ahoge.png"
   ],
   "states": {
     "eyes": {
@@ -23,22 +28,17 @@
     }
   },
   "sway_layers": [
+    "16Ahoge.png",
     {
-      "file": "18HairFront.png",
-      "degrees": 4,
-      "period": 3.1,
-      "pivot": "bottom"
-    },
-    {
-      "file": "13Goatee.png",
+      "file": "13Hair_Detail_Down.png",
       "degrees": 5,
       "period": 2.4,
       "pivot": "top"
     },
     {
       "file": "02Body.png",
-      "degrees": 3,
-      "period": 4.2,
+      "degrees": 2.5,
+      "period": 4.4,
       "pivot": "bottom"
     },
     {
@@ -48,17 +48,5 @@
       "follow_bounce": true
     }
   ],
-  "effect_layers": [
-    {
-      "file": "19EyeShine.png",
-      "effect": "sparkle",
-      "period": 5.5,
-      "duty": 0.06,
-      "max_opacity": 0.9
-    }
-  ],
-  "canvas": [
-    1280,
-    1280
-  ]
+  "bounce_react_layers": ["03Ear_Right.png", "12Ear_Left.png"]
 }

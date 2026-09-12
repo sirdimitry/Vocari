@@ -90,12 +90,23 @@ def _wrapped_rect(metrics: QFontMetricsF, width: float, text: str) -> QRectF:
     return metrics.boundingRect(QRectF(0, 0, width, 1e6), wrap_flags(metrics, width, text), text)
 
 
+def _displayed(text: str, uppercase: bool) -> str:
+    """Applies the "ALL CAPS" toggle. Uppercasing changes both which glyphs
+    get measured and how wide they are, so this has to run before wrapping
+    is calculated (measure()), not just before painting (paint()) — the two
+    must agree on the exact string or the wrap/size measure() picked won't
+    match what actually gets drawn."""
+    return text.upper() if uppercase else text
+
+
 def measure(config: BubbleConfig, canvas_size: tuple[int, int], nick: str, text: str) -> BubbleLayout:
     """Picks the bubble's size: wide enough to read comfortably, wrapped to a
     few lines rather than one long strip, and never past the configured
     max_width/max_height. If even the widest bubble can't hold the text, the
     message font is stepped down until it fits, so the text always stays
     inside the backdrop instead of spilling over it."""
+    nick = _displayed(nick, config.nick_uppercase)
+    text = _displayed(text, config.text_uppercase)
     canvas_w, canvas_h = canvas_size
     max_inner = max(80.0, canvas_w * config.max_width_fraction - 2 * PADDING_X)
     max_height = max(120.0, canvas_h * config.max_height_fraction)
@@ -216,6 +227,8 @@ def paint(
     custom_pixmap: QPixmap | None = None,
 ) -> None:
     """Draws the bubble with its top-left at `origin` (canvas coordinates)."""
+    nick = _displayed(nick, config.nick_uppercase)
+    text = _displayed(text, config.text_uppercase)
     rect = QRectF(origin.x(), origin.y(), layout.width, layout.height)
 
     painter.save()

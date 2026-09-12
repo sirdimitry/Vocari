@@ -111,6 +111,7 @@ class BubbleConfig:
     # space as text_size.
     text_stroke_color: str = "#a8000000"  # black, ~66% opaque
     text_stroke_width: int = 3
+    text_uppercase: bool = False
 
     nick_color: str = "#00d0d0"
     nick_font: str = "Segoe UI Black"
@@ -119,6 +120,7 @@ class BubbleConfig:
     nick_italic: bool = False
     nick_stroke_color: str = "#a8000000"
     nick_stroke_width: int = 3
+    nick_uppercase: bool = False
 
     # Speaks the sender's name before the message itself — a separate
     # synthesis pass isn't needed, the phrase is just prepended to the text

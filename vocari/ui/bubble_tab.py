@@ -283,11 +283,15 @@ class BubbleTab(QWidget):
         )
         form.addRow("Шрифт сообщения:", self.text_font)
 
-        self.text_size = QSpinBox()
-        self.text_size.setRange(10, 200)
-        self.text_size.setValue(self.config.bubble.text_size)
-        self.text_size.valueChanged.connect(lambda v: self._set("text_size", v))
-        form.addRow("Размер сообщения:", self.text_size)
+        self.text_size, text_size_row = self._size_row(
+            self.config.bubble.text_size, lambda v: self._set("text_size", v)
+        )
+        form.addRow("Размер сообщения:", text_size_row)
+
+        self.text_uppercase = QCheckBox("Все заглавными буквами")
+        self.text_uppercase.setChecked(self.config.bubble.text_uppercase)
+        self.text_uppercase.toggled.connect(lambda v: self._set("text_uppercase", v))
+        form.addRow("", self.text_uppercase)
 
         self.text_color = ColorButton(
             self.config.bubble.text_color, lambda c: self._set("text_color", c)
@@ -312,11 +316,15 @@ class BubbleTab(QWidget):
         )
         form.addRow("Шрифт ника:", self.nick_font)
 
-        self.nick_size = QSpinBox()
-        self.nick_size.setRange(10, 200)
-        self.nick_size.setValue(self.config.bubble.nick_size)
-        self.nick_size.valueChanged.connect(lambda v: self._set("nick_size", v))
-        form.addRow("Размер ника:", self.nick_size)
+        self.nick_size, nick_size_row = self._size_row(
+            self.config.bubble.nick_size, lambda v: self._set("nick_size", v)
+        )
+        form.addRow("Размер ника:", nick_size_row)
+
+        self.nick_uppercase = QCheckBox("Все заглавными буквами")
+        self.nick_uppercase.setChecked(self.config.bubble.nick_uppercase)
+        self.nick_uppercase.toggled.connect(lambda v: self._set("nick_uppercase", v))
+        form.addRow("", self.nick_uppercase)
 
         self.nick_color = ColorButton(
             self.config.bubble.nick_color, lambda c: self._set("nick_color", c)
@@ -408,6 +416,30 @@ class BubbleTab(QWidget):
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(hint)
         return box
+
+    def _size_row(self, value: int, on_changed: Callable[[int], None]) -> tuple[QSpinBox, QWidget]:
+        """Slider + spinbox for a font size, kept in sync both ways — a
+        slider lets you drag straight to roughly the right size instead of
+        clicking a spinbox's up/down arrows one point at a time to get from
+        say 46 to 120."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(10, 200)
+        slider.setValue(value)
+
+        spin = QSpinBox()
+        spin.setRange(10, 200)
+        spin.setValue(value)
+
+        slider.valueChanged.connect(spin.setValue)
+        spin.valueChanged.connect(slider.setValue)
+        spin.valueChanged.connect(on_changed)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(slider, 1)
+        row_layout.addWidget(spin)
+        return spin, row
 
     # -- handlers ---------------------------------------------------------
 
