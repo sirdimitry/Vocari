@@ -59,6 +59,40 @@ class RenderConfig:
 
 
 @dataclass
+class BubbleConfig:
+    """The speech bubble drawn above/next to the speaking avatar: the message
+    itself plus who sent it. Sizes here are in the model's canvas pixels (the
+    same space the avatar art lives in), so the bubble scales with the avatar
+    instead of needing to be re-tuned every time the overlay scale changes."""
+    enabled: bool = True
+    # cloud | rounded | ellipse | glass | banner | custom — see rendering/bubble.py
+    style: str = "cloud"
+    custom_image: str = ""  # PNG used when style == "custom" (9-slice stretched)
+    scale: float = 1.0  # 0.5..2.0, on top of the automatic text-driven sizing
+    appear_speed: int = 50  # 1..100, how fast it pops in (same dial style as exit_speed)
+    # Hard ceiling on the bubble, as a fraction of the avatar's canvas width /
+    # height — the bubble grows to fit the text but never past this.
+    max_width_fraction: float = 1.6
+    max_height_fraction: float = 0.9
+    position: str = "top"  # top | top-left | top-right | left | right
+    offset_x: int = 0  # extra nudge in canvas px, on top of `position`
+    offset_y: int = 0
+
+    background_color: str = "#f7f7fbf0"  # #RRGGBBAA — alpha keeps it readable over anything
+    border_color: str = "#2b2b33"
+
+    text_color: str = "#16161a"
+    text_font: str = "Segoe UI"
+    text_size: int = 46
+
+    nick_color: str = "#6c5ce7"
+    nick_font: str = "Segoe UI"
+    nick_size: int = 40
+    nick_bold: bool = True
+    nick_italic: bool = False
+
+
+@dataclass
 class HotkeyConfig:
     # A QKeySequence string (e.g. "F9" or "Ctrl+Alt+S"), empty = disabled.
     # Registered as a system-wide hotkey (works even while a game/OBS has
@@ -102,6 +136,7 @@ class AppConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     twitch: TwitchConfig = field(default_factory=TwitchConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
+    bubble: BubbleConfig = field(default_factory=BubbleConfig)
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
@@ -120,7 +155,10 @@ class AppConfig:
         tts = TTSConfig(**{**asdict(TTSConfig()), **data.get("tts", {})})
         twitch = TwitchConfig(**{**asdict(TwitchConfig()), **data.get("twitch", {})})
         hotkey = HotkeyConfig(**{**asdict(HotkeyConfig()), **data.get("hotkey", {})})
-        return cls(overlay=overlay, render=render, tts=tts, twitch=twitch, hotkey=hotkey)
+        bubble = BubbleConfig(**{**asdict(BubbleConfig()), **data.get("bubble", {})})
+        return cls(
+            overlay=overlay, render=render, tts=tts, twitch=twitch, hotkey=hotkey, bubble=bubble
+        )
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
         payload = {
@@ -129,5 +167,6 @@ class AppConfig:
             "tts": asdict(self.tts),
             "twitch": asdict(self.twitch),
             "hotkey": asdict(self.hotkey),
+            "bubble": asdict(self.bubble),
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -42,7 +42,7 @@ class TTSQueue(QObject):
 
         # Messages that arrived while all 7 stage slots were taken — tried
         # again (via add_speaker) whenever a slot frees up.
-        self._backlog: deque[str] = deque()
+        self._backlog: deque[tuple[str, str]] = deque()  # (text, author)
         self._thread: QThread | None = None
         self._worker: SynthesisWorker | None = None
         self._pending_instance_id = 0
@@ -87,20 +87,20 @@ class TTSQueue(QObject):
         logger.info("Пропуск фразы по хоткею: '%s' (id=%d)", speaker.text, speaker.id)
         self.window.retire_speaker(speaker.id)
 
-    def enqueue(self, text: str) -> None:
-        inst = self.window.add_speaker(text)
+    def enqueue(self, text: str, author: str = "") -> None:
+        inst = self.window.add_speaker(text, author)
         if inst is None:
-            self._backlog.append(text)
+            self._backlog.append((text, author))
             logger.debug("TTS-очередь: сцена занята (7/7), сообщение ждёт в резерве (%d в резерве)", len(self._backlog))
 
     def _on_slot_freed(self) -> None:
         if self._backlog:
-            text = self._backlog.popleft()
+            text, author = self._backlog.popleft()
             logger.debug(
                 "TTS-очередь: сообщение из резерва выходит на сцену (%d осталось в резерве)",
                 len(self._backlog),
             )
-            self.enqueue(text)
+            self.enqueue(text, author)
 
     def _on_speaker_ready(self, instance_id: int) -> None:
         try:
@@ -183,6 +183,11 @@ class TTSQueue(QObject):
     def _start_playback(self, instance_id: int, audio: bytes) -> None:
         if self._is_stale(instance_id):
             return
+        # Bubble goes up with the first word and comes down the moment the
+        # line ends — the avatar then holds its pose for post_speech_hold_ms
+        # before leaving, so the text is always gone before it turns to go.
+        self.window.set_bubble_shown(instance_id, True)
+
         volume_gain = max(0.0, 1.0 + self.config.tts.volume_percent / 100.0)
         self.audio_player.play(
             audio,
@@ -194,6 +199,7 @@ class TTSQueue(QObject):
         )
 
     def _retire_after_hold(self, instance_id: int) -> None:
+        self.window.set_bubble_shown(instance_id, False)
         self._defer(
             self.config.render.post_speech_hold_ms,
             lambda: self.window.retire_speaker(instance_id),

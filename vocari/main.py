@@ -111,7 +111,7 @@ def main() -> None:
 
     _apply_screen_defaults(config, model)
 
-    window = OverlayWindow(model, config.overlay, config.render)
+    window = OverlayWindow(model, config.overlay, config.render, config.bubble)
     window.show()
 
     def on_model_imported(model_dir: Path) -> None:
@@ -166,7 +166,7 @@ def main() -> None:
         logger.info(
             "Twitch !tts от %s: '%s'%s", message.display_name, text, " (обрезано)" if truncated else ""
         )
-        tts_queue.enqueue(text)
+        tts_queue.enqueue(text, message.display_name)
 
     twitch_bot.message_received.connect(on_chat_message)
 
@@ -182,6 +182,7 @@ def main() -> None:
         window.set_entrance_from_right,
         window.stage.set_exit_speed,
         on_skip_hotkey_changed,
+        window.apply_bubble_settings,
         tts_providers,
         tts_queue,
         twitch_bot,

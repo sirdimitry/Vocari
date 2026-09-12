@@ -61,6 +61,11 @@ class AvatarInstance:
     x_offset: float  # current position, canvas-relative px, 0 == speaking slot
     target_x_offset: float
     slot: int  # SPEAKER_SLOT, or FIRST_WAITING_SLOT..LAST_SLOT for a queued one
+    author: str = ""  # who sent the message, shown in the speech bubble
+    # 0 = no bubble, 1 = fully popped in; animated by tick() so the bubble
+    # scales in and back out instead of blinking on and off.
+    bubble_progress: float = 0.0
+    bubble_shown: bool = False
     mirrored: bool = False
     phase: str = "entering"  # entering | speaking | waiting | exiting
     active_frame: dict[str, str] = field(default_factory=lambda: {"eyes": "open", "mouth": "closed"})
@@ -75,7 +80,13 @@ class AvatarInstance:
 
 
 class Stage:
-    def __init__(self, canvas_width: int, entrance_from_right: bool = False, exit_speed: int = 33):
+    def __init__(
+        self,
+        canvas_width: int,
+        entrance_from_right: bool = False,
+        exit_speed: int = 33,
+        bubble_speed: int = 50,
+    ):
         self.instances: list[AvatarInstance] = []
         self._occupied_slots: set[int] = set()
         self._on_speaker_ready: Callable[[int], None] | None = None
@@ -86,6 +97,7 @@ class Stage:
         # per-instance choice.
         self.entrance_from_right = entrance_from_right
         self.exit_lag_coeff = exit_speed_to_coeff(exit_speed)
+        self.bubble_lag_coeff = exit_speed_to_coeff(bubble_speed)
         self.set_canvas_width(canvas_width)
 
     def set_exit_speed(self, speed: int) -> None:
@@ -181,7 +193,7 @@ class Stage:
         slot = FIRST_WAITING_SLOT + len(waiting)
         return slot if slot <= LAST_SLOT else None
 
-    def add(self, text: str) -> AvatarInstance | None:
+    def add(self, text: str, author: str = "") -> AvatarInstance | None:
         """Creates and places a new instance at the back of the queue;
         returns None if the stage is full (caller keeps the text in its own
         backlog and retries via the on_slot_freed callback)."""
@@ -191,6 +203,7 @@ class Stage:
         instance = AvatarInstance(
             id=next(_id_counter),
             text=text,
+            author=author,
             x_offset=self._exit_x_offset,
             target_x_offset=self._slot_x_offset(slot),
             slot=slot,
@@ -218,6 +231,17 @@ class Stage:
         inst = self.get(instance_id)
         if inst is not None:
             inst.bounce_level = max(0.0, min(1.0, level))
+
+    def set_bubble_shown(self, instance_id: int, shown: bool) -> None:
+        """Speech bubble on/off for one instance. tick() animates the actual
+        pop in/out, so callers just flip the flag at the right moment (see
+        TTSQueue: on when the line starts, off before the avatar leaves)."""
+        inst = self.get(instance_id)
+        if inst is not None:
+            inst.bubble_shown = shown
+
+    def set_bubble_speed(self, speed: int) -> None:
+        self.bubble_lag_coeff = exit_speed_to_coeff(speed)
 
     def retire(self, instance_id: int) -> None:
         """Always the same: mirror and slide off toward the entrance side,
@@ -262,6 +286,11 @@ class Stage:
     def tick(self) -> None:
         finished_exit_ids = []
         for inst in self.instances:
+            target_progress = 1.0 if inst.bubble_shown and inst.phase != "exiting" else 0.0
+            inst.bubble_progress += (target_progress - inst.bubble_progress) * self.bubble_lag_coeff
+            if abs(target_progress - inst.bubble_progress) < 0.01:
+                inst.bubble_progress = target_progress
+
             if abs(inst.target_x_offset - inst.x_offset) >= ARRIVAL_EPSILON_PX:
                 # Leaving uses the user's own speed dial; arriving keeps the
                 # fixed pace, since that one doubles as the window that hides

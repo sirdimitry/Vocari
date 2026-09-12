@@ -11,12 +11,13 @@ import math
 import random
 
 import numpy as np
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
-from vocari.config.settings import OverlayConfig, RenderConfig
+from vocari.config.settings import BubbleConfig, OverlayConfig, RenderConfig
 from vocari.logging_setup import get_logger
+from vocari.rendering import bubble
 from vocari.rendering.model import AvatarModel
 from vocari.rendering.stage import AvatarInstance, Stage
 
@@ -55,6 +56,11 @@ BOUNCE_REACT_DEG_PER_PX = 0.45  # target rotation per px of current bounce offse
 BOUNCE_REACT_LAG_COEFF = 0.25  # how much of the gap to target angle closes per tick (lower = laggier)
 
 ALPHA_THRESHOLD = 10
+
+# Space reserved above the avatars for the speech bubble, as a fraction of the
+# canvas height. The window grows upward by this; without it a bubble drawn
+# above the head would simply be clipped off by the window edge.
+BUBBLE_HEADROOM_FRACTION = 0.85
 
 
 def _to_alpha_array(pixmap: QPixmap) -> np.ndarray | None:
@@ -111,11 +117,20 @@ def _attachment_pivot(pixmap: QPixmap, canvas_center_x: float) -> tuple[float, f
 
 
 class OverlayWindow(QWidget):
-    def __init__(self, model: AvatarModel, config: OverlayConfig, render_config: RenderConfig):
+    def __init__(
+        self,
+        model: AvatarModel,
+        config: OverlayConfig,
+        render_config: RenderConfig,
+        bubble_config: BubbleConfig | None = None,
+    ):
         super().__init__()
         self.model = model
         self.config = config
         self.render_config = render_config
+        self.bubble_config = bubble_config if bubble_config is not None else BubbleConfig()
+        self._bubble_pixmap: QPixmap | None = None
+        self.reload_bubble_image()
 
         self._z_order = model.build_z_order()
         self._pixmaps: dict[str, QPixmap] = self._load_pixmaps()
@@ -124,6 +139,7 @@ class OverlayWindow(QWidget):
             canvas_width=model.canvas_size[0],
             entrance_from_right=render_config.entrance_from_right,
             exit_speed=render_config.exit_speed,
+            bubble_speed=self.bubble_config.appear_speed,
         )
 
         # Deliberately NOT Qt.WindowType.Tool: that sets WS_EX_TOOLWINDOW,
@@ -205,17 +221,42 @@ class OverlayWindow(QWidget):
         entrance is on (see Stage.draw_origin_x)."""
         return round(self.stage.draw_origin_x * self.config.scale)
 
+    def _bubble_side_margins(self) -> tuple[float, float]:
+        """(left, right) canvas-space padding so a bubble wider than the
+        avatar isn't clipped by the window edge. The queue corridor already
+        provides room on the entrance side, so the margin only goes on the
+        opposite side — which also means the window still grows away from
+        config.pos_x rather than moving the avatar."""
+        if not self.bubble_config.enabled:
+            return 0.0, 0.0
+        margin = self.model.canvas_size[0] * self.bubble_config.max_width_fraction
+        return (margin, 0.0) if self.stage.entrance_from_right else (0.0, margin)
+
+    def _bubble_headroom(self) -> float:
+        """Extra canvas-space height above the avatars for the speech bubble.
+        The window grows upward by this much and the avatars are drawn shifted
+        down by it, so config.pos_x/pos_y keeps meaning "where the avatar
+        stands" — adding a bubble must not move the avatar."""
+        if not self.bubble_config.enabled:
+            return 0.0
+        return self.model.canvas_size[1] * BUBBLE_HEADROOM_FRACTION
+
     def _apply_geometry(self) -> None:
         """Resizes for the (fixed, worst-case-7) stage width and repositions
         so the *speaking slot* — not the window's own top-left — stays at
         config.pos_x/pos_y regardless of scale."""
         canvas_w, canvas_h = self.model.canvas_size
-        stage_w = self.stage.stage_origin_x + canvas_w
+        left_margin, right_margin = self._bubble_side_margins()
+        stage_w = left_margin + self.stage.stage_origin_x + canvas_w + right_margin
+        headroom = self._bubble_headroom()
         self.resize(
             max(1, round(stage_w * self.config.scale)),
-            max(1, round(canvas_h * self.config.scale)),
+            max(1, round((canvas_h + headroom) * self.config.scale)),
         )
-        self.move(self.config.pos_x - self._stage_offset_px(), self.config.pos_y)
+        self.move(
+            self.config.pos_x - self._stage_offset_px() - round(left_margin * self.config.scale),
+            self.config.pos_y - round(headroom * self.config.scale),
+        )
 
     def set_scale(self, scale: float) -> None:
         """From Settings → Модель, as an alternative to the mouse wheel."""
@@ -239,6 +280,23 @@ class OverlayWindow(QWidget):
         if was_visible:
             self.show()  # Qt requires re-showing after a window flag change
 
+    def reload_bubble_image(self) -> None:
+        """(Re)loads the user's own bubble artwork after they pick a file."""
+        path = self.bubble_config.custom_image
+        self._bubble_pixmap = QPixmap(path) if path else None
+
+    def apply_bubble_settings(self) -> None:
+        """Called after anything in the bubble tab changes — the headroom (and
+        therefore the window size/position) depends on whether bubbles are on."""
+        self.reload_bubble_image()
+        self.stage.set_bubble_speed(self.bubble_config.appear_speed)
+        self._apply_geometry()
+        self.update()
+
+    def set_bubble_shown(self, instance_id: int, shown: bool) -> None:
+        self.stage.set_bubble_shown(instance_id, shown)
+        self.update()
+
     def set_entrance_from_right(self, enabled: bool) -> None:
         """Live-toggle from Settings → Модель: queue/entrance/exit all move
         to the right side instead of the left. The speaking slot must stay
@@ -250,12 +308,12 @@ class OverlayWindow(QWidget):
 
     # -- stage / speaker control (used by TTSQueue) ------------------------
 
-    def add_speaker(self, text: str) -> AvatarInstance | None:
+    def add_speaker(self, text: str, author: str = "") -> AvatarInstance | None:
         """Requests a new avatar instance for `text`; it immediately claims
         a stage slot (speaking if free, else the next waiting slot) and
         starts sliding in from off-screen, or returns None if all 7 slots
         are taken (caller should keep `text` in its own backlog)."""
-        inst = self.stage.add(text)
+        inst = self.stage.add(text, author)
         if inst is not None:
             self._schedule_next_blink(inst.id)
         self.update()
@@ -358,14 +416,72 @@ class OverlayWindow(QWidget):
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
             canvas_w, canvas_h = self.model.canvas_size
-            stage_w = self.stage.stage_origin_x + canvas_w
+            left_margin, right_margin = self._bubble_side_margins()
+            stage_w = left_margin + self.stage.stage_origin_x + canvas_w + right_margin
+            headroom = self._bubble_headroom()
+            stage_h = canvas_h + headroom
             if self.width() and self.height():
-                painter.scale(self.width() / stage_w, self.height() / canvas_h)
+                painter.scale(self.width() / stage_w, self.height() / stage_h)
+            # Shift into the stage's own coordinates: bubbles get headroom
+            # above and a side margin on the non-corridor side.
+            painter.translate(left_margin, headroom)
 
             for inst in self.stage.instances:
                 self._paint_instance(painter, inst, canvas_w)
+            # Bubbles last, so one never ends up behind a neighbouring avatar.
+            for inst in self.stage.instances:
+                self._paint_bubble(painter, inst, canvas_w, canvas_h)
         finally:
             painter.end()
+
+    def _paint_bubble(self, painter: QPainter, inst: AvatarInstance, canvas_w: int, canvas_h: int) -> None:
+        config = self.bubble_config
+        if not config.enabled or inst.bubble_progress <= 0.01 or not inst.text:
+            return
+
+        layout = bubble.measure(config, self.model.canvas_size, inst.author, inst.text)
+        slot_scale = self.stage.slot_scale(inst.slot)
+        avatar_left = self.stage.draw_origin_x + inst.x_offset + canvas_w * (1 - slot_scale) / 2
+        avatar_width = canvas_w * slot_scale
+        avatar_top = canvas_h * (1 - slot_scale)
+
+        # Anchor per the configured position, then apply the user's nudge.
+        if config.position == "left":
+            x = avatar_left - layout.width - 20
+            y = avatar_top + 40
+        elif config.position == "right":
+            x = avatar_left + avatar_width + 20
+            y = avatar_top + 40
+        elif config.position == "top-left":
+            x = avatar_left - layout.width * 0.55
+            y = avatar_top - layout.height - bubble.TAIL_HEIGHT
+        elif config.position == "top-right":
+            x = avatar_left + avatar_width - layout.width * 0.45
+            y = avatar_top - layout.height - bubble.TAIL_HEIGHT
+        else:  # "top"
+            x = avatar_left + (avatar_width - layout.width) / 2
+            y = avatar_top - layout.height - bubble.TAIL_HEIGHT
+        x += config.offset_x
+        y += config.offset_y
+
+        avatar_center_x = avatar_left + avatar_width / 2
+        tail_at = avatar_center_x if config.position.startswith("top") else None
+
+        painter.save()
+        # Pop in/out from the side nearest the avatar, so it grows out of the
+        # character rather than materialising in mid-air.
+        progress = inst.bubble_progress
+        pivot_x, pivot_y = avatar_center_x, y + layout.height
+        painter.translate(pivot_x, pivot_y)
+        painter.scale(progress * config.scale, progress * config.scale)
+        painter.translate(-pivot_x, -pivot_y)
+        painter.setOpacity(min(1.0, progress * 1.4))
+
+        bubble.paint(
+            painter, config, layout, QPointF(x, y), inst.author, inst.text, tail_at,
+            self._bubble_pixmap,
+        )
+        painter.restore()
 
     def _paint_instance(self, painter: QPainter, inst: AvatarInstance, canvas_w: int) -> None:
         painter.save()

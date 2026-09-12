@@ -22,6 +22,7 @@ from vocari.tts.base import TTSProvider
 from vocari.tts.silero_provider import SileroTTSProvider
 from vocari.tts.tts_queue import TTSQueue
 from vocari.twitch.bot_controller import TwitchBotController
+from vocari.ui.bubble_tab import BubbleTab
 from vocari.ui.model_tab import ModelTab
 from vocari.ui.render_tab import RenderTab
 from vocari.ui.silero_tab import SileroTab
@@ -47,6 +48,7 @@ class SettingsWindow(QWidget):
         on_entrance_side_toggled: Callable[[bool], None],
         on_exit_speed_changed: Callable[[int], None],
         on_skip_hotkey_changed: Callable[[str], bool],
+        on_bubble_changed: Callable[[], None],
         tts_providers: dict[str, TTSProvider],
         tts_queue: TTSQueue,
         twitch_bot_controller: TwitchBotController,
@@ -74,6 +76,10 @@ class SettingsWindow(QWidget):
         # The model tab lays itself out in two columns, so it gets the full
         # window width; the single-column tabs stay within a readable measure.
         tabs.addTab(self._wrap(self.model_tab, constrain_width=False), "Модель")
+        tabs.addTab(
+            self._wrap(BubbleTab(config, on_bubble_changed, tts_queue), constrain_width=False),
+            "Облачко",
+        )
         tabs.addTab(self._wrap(TTSTab(config)), "TTS")
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
