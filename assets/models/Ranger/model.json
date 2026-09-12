@@ -1,17 +1,15 @@
 {
   "name": "Ranger",
-  "canvas": [
-    1280,
-    1280
-  ],
   "base_layers": [
-    "01Pack.png",
+    "01Back.png",
     "02Body.png",
-    "03Pad_Right.png",
-    "12Pad_Left.png",
+    "03Ear_Right.png",
+    "12Ear_Left.png",
     "05Head.png",
-    "08Visor.png",
-    "16Antenna.png"
+    "08Brows.png",
+    "16Antenna.png",
+    "17EyeGlow.png",
+    "18Emitter.png"
   ],
   "states": {
     "eyes": {
@@ -20,16 +18,42 @@
       "closed": "07Eyes_Closed.png"
     },
     "mouth": {
-      "order": 6,
+      "order": 7,
       "open": "09Mouth_Open.png",
       "closed": "10Mouth_Closed.png"
     }
   },
   "sway_layers": [
-    "16Antenna.png"
+    {
+      "file": "16Antenna.png",
+      "degrees": 10,
+      "period": 1.6,
+      "pivot": "bottom"
+    }
   ],
   "bounce_react_layers": [
-    "03Pad_Right.png",
-    "12Pad_Left.png"
+    "03Ear_Right.png",
+    "12Ear_Left.png"
+  ],
+  "effect_layers": [
+    {
+      "file": "17EyeGlow.png",
+      "effect": "sparkle",
+      "period": 6.5,
+      "duty": 0.1,
+      "max_opacity": 0.95
+    },
+    {
+      "file": "18Emitter.png",
+      "effect": "emit",
+      "period": 1.8,
+      "copies": 3,
+      "spread": 0.5,
+      "max_opacity": 0.8
+    }
+  ],
+  "canvas": [
+    1280,
+    1280
   ]
 }

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QWidget
 from vocari.config.settings import BubbleConfig, OverlayConfig, RenderConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering import bubble
-from vocari.rendering.model import AvatarModel
+from vocari.rendering.model import AvatarModel, EffectSpec, SwaySpec
 from vocari.rendering.stage import AvatarInstance, Stage
 
 logger = get_logger("overlay")
@@ -82,23 +82,48 @@ def _to_alpha_array(pixmap: QPixmap) -> np.ndarray | None:
     return arr[:, : width * 4].reshape(height, width, 4)[:, :, 3].copy()  # ARGB32 is B,G,R,A in memory
 
 
-def _sway_pivot(pixmap: QPixmap) -> tuple[float, float] | None:
+def _sway_pivot(pixmap: QPixmap, mode: str = "bottom") -> tuple[float, float] | None:
     """Where a sway layer is "rooted" so it can rotate from there instead of
     just translating — e.g. the ahoge should swing from the point where it
-    meets the scalp, not slide up and down as a rigid block. Approximated as
-    the horizontal center of its opaque pixels at their lowest row (works for
-    anything that sticks up/out from a base, like hair strands or antennae);
-    None if the layer is fully transparent."""
+    meets the scalp, not slide up and down as a rigid block.
+
+    "bottom" (the default) takes the horizontal center of the opaque pixels at
+    their lowest row, which is right for anything sticking up out of the head.
+    "top" does the same at the highest row, for parts that hang down from their
+    attachment instead (drool, a goatee, a loose strand) — those would otherwise
+    swing their root around their own tip. "center" is the opaque centroid.
+    Returns None if the layer is fully transparent."""
     alpha = _to_alpha_array(pixmap)
     if alpha is None:
         return None
     ys, xs = np.where(alpha > ALPHA_THRESHOLD)
     if len(ys) == 0:
         return None
-    bottom_y = int(ys.max())
-    xs_at_bottom = xs[ys == bottom_y]
-    pivot_x = float(xs_at_bottom.mean())
-    return pivot_x, float(bottom_y)
+    if mode == "center":
+        return float(xs.mean()), float(ys.mean())
+    edge_y = int(ys.min()) if mode == "top" else int(ys.max())
+    xs_at_edge = xs[ys == edge_y]
+    return float(xs_at_edge.mean()), float(edge_y)
+
+
+def _effect_offset(spec: EffectSpec, t: float) -> tuple[float, float]:
+    """Opacity (and, for shimmer, a small sideways drift) for one effect layer
+    at time `t` (seconds, already includes the instance's own phase offset so
+    several avatars with the same effect don't blink in unison)."""
+    phase = (t / spec.period) % 1.0
+    span = spec.max_opacity - spec.min_opacity
+    if spec.effect == "sparkle":
+        if phase >= spec.duty:
+            return spec.min_opacity, 0.0
+        triangle = 1.0 - abs(phase / spec.duty - 0.5) * 2
+        return spec.min_opacity + span * triangle, 0.0
+    if spec.effect == "shimmer":
+        wave = 0.5 + 0.5 * math.sin(TWO_PI * phase)
+        dx = spec.drift * math.sin(TWO_PI * phase * 2)
+        return spec.min_opacity + span * wave, dx
+    # "pulse" and "emit" (the emitting layer itself also breathes gently).
+    wave = 0.5 + 0.5 * math.sin(TWO_PI * phase)
+    return spec.min_opacity + span * wave, 0.0
 
 
 @dataclass
@@ -112,7 +137,10 @@ class ModelPack:
     z_order: list[tuple[str, str]]
     sway_phase: dict[str, float]
     sway_pivot: dict[str, tuple[float, float]]
+    sway_spec: dict[str, SwaySpec]
     bounce_pivot: dict[str, tuple[float, float]]
+    effect_spec: dict[str, EffectSpec]
+    effect_origin: dict[str, tuple[float, float]]
 
     @classmethod
     def build(cls, model: AvatarModel) -> "ModelPack":
@@ -121,10 +149,15 @@ class ModelPack:
             for filename in model.all_filenames()
         }
         sway_pivot: dict[str, tuple[float, float]] = {}
-        for filename in model.sway_layers:
-            pivot = _sway_pivot(pixmaps[filename]) if filename in pixmaps else None
+        sway_spec: dict[str, SwaySpec] = {}
+        for spec in model.sway:
+            filename = spec.file
+            if filename not in pixmaps:
+                continue
+            pivot = _sway_pivot(pixmaps[filename], spec.pivot)
             if pivot is not None:
                 sway_pivot[filename] = pivot
+                sway_spec[filename] = spec
 
         center_x = model.canvas_size[0] / 2
         bounce_pivot: dict[str, tuple[float, float]] = {}
@@ -133,13 +166,26 @@ class ModelPack:
             if pivot is not None:
                 bounce_pivot[filename] = pivot
 
+        effect_spec: dict[str, EffectSpec] = {}
+        effect_origin: dict[str, tuple[float, float]] = {}
+        for spec in model.effects:
+            if spec.file not in pixmaps:
+                continue
+            effect_spec[spec.file] = spec
+            origin = _sway_pivot(pixmaps[spec.file], "center")
+            if origin is not None:
+                effect_origin[spec.file] = origin
+
         return cls(
             model=model,
             pixmaps=pixmaps,
             z_order=model.build_z_order(),
-            sway_phase={name: i * 0.9 for i, name in enumerate(model.sway_layers)},
+            sway_phase={name: i * 0.9 for i, name in enumerate(sway_pivot)},
             sway_pivot=sway_pivot,
+            sway_spec=sway_spec,
             bounce_pivot=bounce_pivot,
+            effect_spec=effect_spec,
+            effect_origin=effect_origin,
         )
 
 
@@ -211,6 +257,10 @@ class OverlayWindow(QWidget):
         self._sway_layer_phase: dict[str, float] = {}
         self._sway_layer_pivot: dict[str, tuple[float, float]] = {}
         self._bounce_react_pivot: dict[str, tuple[float, float]] = {}
+        # Free-running clock (seconds) for effect layers (pulse/shimmer/
+        # sparkle/emit) — unlike _sway_phase this never wraps, since effect
+        # periods can be much longer than the sway cycle.
+        self._clock_s = 0.0
         self._recompute_sway_layers()
 
         # Runs continuously — 30 FPS repaint of a mostly-transparent widget
@@ -459,6 +509,7 @@ class OverlayWindow(QWidget):
 
     def _on_animation_tick(self) -> None:
         self.stage.tick()  # entrance/exit/promotion — independent of "Покачивание"
+        self._clock_s += ANIMATION_INTERVAL_MS / 1000  # drives effect layers; never gated on sway
 
         if self._sway_enabled:
             self._sway_phase = (self._sway_phase + SWAY_PHASE_STEP) % TWO_PI
@@ -473,8 +524,36 @@ class OverlayWindow(QWidget):
                         inst.bounce_react_angle[filename] = (
                             current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
                         )
+                if pack.model.eye_dart:
+                    self._update_eye_dart(inst, pack)
 
         self.update()
+
+    def _update_eye_dart(self, inst: AvatarInstance, pack: "ModelPack") -> None:
+        """Nudges the whole eye layer a few pixels toward a randomly-picked
+        glance target, holding it there for a bit before rolling a new one —
+        a wandering gaze instead of a fixed stare. Cheap: it only shifts where
+        the already-drawn eye pixmap is painted, no extra art needed."""
+        eye_h = None
+        eyes_group = pack.model.states.get("eyes")
+        if eyes_group is not None:
+            sample = next(iter(eyes_group.frames.values()), None)
+            pixmap = pack.pixmaps.get(sample) if sample else None
+            if pixmap is not None:
+                eye_h = pixmap.height()
+        amplitude = (eye_h or pack.model.canvas_size[1] * 0.1) * 0.05
+
+        inst.eye_look_hold_s -= ANIMATION_INTERVAL_MS / 1000
+        if inst.eye_look_hold_s <= 0:
+            inst.eye_look_target = (
+                random.uniform(-amplitude, amplitude),
+                random.uniform(-amplitude * 0.5, amplitude * 0.5),
+            )
+            inst.eye_look_hold_s = random.uniform(0.8, 2.6)
+
+        cur_x, cur_y = inst.eye_look
+        tgt_x, tgt_y = inst.eye_look_target
+        inst.eye_look = (cur_x + (tgt_x - cur_x) * 0.12, cur_y + (tgt_y - cur_y) * 0.12)
 
     # -- painting ---------------------------------------------------------
 
@@ -583,12 +662,22 @@ class OverlayWindow(QWidget):
             if pixmap is None or pixmap.isNull():
                 continue
             y_offset = bounce_offset
+            x_offset = 0.0
+
+            # Wandering gaze: shifts the whole eye pixmap by a few px instead
+            # of needing separate iris art — see _update_eye_dart().
+            if kind == "state" and ref == "eyes" and self._sway_enabled and pack.model.eye_dart:
+                x_offset += inst.eye_look[0]
+                y_offset += inst.eye_look[1]
 
             sway_pivot = pack.sway_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
             react_pivot = pack.bounce_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
             if sway_pivot is not None:
-                angle = SWAY_ROTATION_DEG * math.sin(
-                    self._sway_phase + pack.sway_phase[ref] + inst.motion_phase_offset
+                spec = pack.sway_spec.get(ref)
+                degrees = spec.degrees if (spec and spec.degrees is not None) else SWAY_ROTATION_DEG
+                period = spec.period if (spec and spec.period is not None) else SWAY_PERIOD_S
+                angle = degrees * math.sin(
+                    TWO_PI * self._clock_s / period + pack.sway_phase[ref] + inst.motion_phase_offset
                 )
             elif react_pivot is not None:
                 angle = inst.bounce_react_angle.get(ref, 0.0)
@@ -596,22 +685,78 @@ class OverlayWindow(QWidget):
                 angle = None
 
             pivot = sway_pivot if sway_pivot is not None else react_pivot
+
+            effect_spec = pack.effect_spec.get(ref) if kind == "layer" else None
+            opacity = 1.0
+            if effect_spec is not None:
+                opacity, extra_dx = _effect_offset(effect_spec, self._clock_s + inst.motion_phase_offset)
+                x_offset += extra_dx
+                if opacity <= 0.003:
+                    continue
+
             if pivot is not None:
                 # Rotate around (pivot_x, pivot_y) in the pixmap's own
-                # coordinates, then shift the whole result by y_offset —
-                # i.e. translate to the (bounce-shifted) pivot, rotate,
-                # then translate back by the *unshifted* pivot so the
-                # y_offset isn't applied twice.
+                # coordinates, then shift the whole result by (x_offset,
+                # y_offset) — i.e. translate to the (offset) pivot, rotate,
+                # then translate back by the *unshifted* pivot so the offset
+                # isn't applied twice.
                 painter.save()
-                painter.translate(pivot[0], pivot[1] + y_offset)
+                if opacity != 1.0:
+                    painter.setOpacity(opacity)
+                painter.translate(pivot[0] + x_offset, pivot[1] + y_offset)
                 painter.rotate(angle)
                 painter.translate(-pivot[0], -pivot[1])
                 painter.drawPixmap(0, 0, pixmap)
                 painter.restore()
+            elif opacity != 1.0:
+                painter.save()
+                painter.setOpacity(opacity)
+                painter.drawPixmap(round(x_offset), round(y_offset), pixmap)
+                painter.restore()
             else:
-                painter.drawPixmap(0, round(y_offset), pixmap)
+                painter.drawPixmap(round(x_offset), round(y_offset), pixmap)
+
+            if effect_spec is not None and effect_spec.effect in ("emit", "drip"):
+                self._paint_effect_echoes(painter, pack, ref, pixmap, effect_spec,
+                                          self._clock_s + inst.motion_phase_offset)
 
         painter.restore()
+
+    def _paint_effect_echoes(self, painter: QPainter, pack: "ModelPack", ref: str,
+                             pixmap: QPixmap, spec: "EffectSpec", t: float) -> None:
+        """Repeating echoes of the source pixmap, evenly spaced across one
+        period so they read as a continuous stream rather than one instance
+        popping in and out.
+
+        "emit" grows the echo outward from its own center and fades it —
+        a radio-wave / radar-ping look, e.g. a signal spreading from an
+        antenna tip. "drip" instead slides the echo straight down while
+        fading, e.g. a droplet detaching and falling from a drool strand."""
+        origin = pack.effect_origin.get(ref)
+        if origin is None:
+            return
+        ox, oy = origin
+        canvas_h = pack.model.canvas_size[1]
+        for i in range(spec.copies):
+            phase = ((t / spec.period) + i / spec.copies) % 1.0
+            fade = max(0.0, 1.0 - phase) * spec.max_opacity
+            if fade <= 0.01:
+                continue
+            painter.save()
+            painter.setOpacity(fade)
+            if spec.effect == "emit":
+                grow = 1.0 + phase * spec.spread * 6
+                painter.translate(ox, oy)
+                painter.scale(grow, grow)
+                painter.translate(-ox, -oy)
+            else:  # drip
+                painter.translate(0, phase * spec.spread * canvas_h)
+                shrink = 1.0 - phase * 0.35
+                painter.translate(ox, oy)
+                painter.scale(shrink, shrink)
+                painter.translate(-ox, -oy)
+            painter.drawPixmap(0, 0, pixmap)
+            painter.restore()
 
     def _resolve_layer(self, pack: ModelPack, kind: str, ref: str,
                        active_frame: dict[str, str]) -> QPixmap | None:

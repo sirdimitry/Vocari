@@ -82,6 +82,12 @@ class AvatarInstance:
     # each rolls its own offset when created, independent of how many others
     # are around.
     motion_phase_offset: float = field(default_factory=lambda: random.uniform(0.0, 2 * math.pi))
+    # Wandering gaze (see AvatarModel.eye_dart): current/target offset applied
+    # to the whole eye layer, plus a countdown to the next glance so each
+    # instance drifts on its own schedule instead of in lockstep.
+    eye_look: tuple[float, float] = (0.0, 0.0)
+    eye_look_target: tuple[float, float] = (0.0, 0.0)
+    eye_look_hold_s: float = field(default_factory=lambda: random.uniform(0.6, 2.2))
 
 
 class Stage:

@@ -1,9 +1,5 @@
 {
   "name": "Orc",
-  "canvas": [
-    1280,
-    1280
-  ],
   "base_layers": [
     "01Back.png",
     "02Body.png",
@@ -11,7 +7,8 @@
     "12Ear_Left.png",
     "05Head.png",
     "08Brows.png",
-    "16Drool.png"
+    "16Topknot.png",
+    "17Drool.png"
   ],
   "states": {
     "eyes": {
@@ -26,10 +23,36 @@
     }
   },
   "sway_layers": [
-    "16Drool.png"
+    {
+      "file": "16Topknot.png",
+      "degrees": 9,
+      "period": 3.4,
+      "pivot": "bottom"
+    },
+    {
+      "file": "17Drool.png",
+      "degrees": 6,
+      "period": 2.1,
+      "pivot": "top"
+    }
   ],
   "bounce_react_layers": [
     "03Ear_Right.png",
     "12Ear_Left.png"
+  ],
+  "effect_layers": [
+    {
+      "file": "17Drool.png",
+      "effect": "drip",
+      "period": 2.4,
+      "copies": 2,
+      "spread": 0.22,
+      "max_opacity": 0.85
+    }
+  ],
+  "eye_dart": true,
+  "canvas": [
+    1280,
+    1280
   ]
 }
