@@ -32,24 +32,14 @@
     },
     {
       "file": "17Drool.png",
-      "degrees": 6,
-      "period": 2.1,
-      "pivot": "top"
+      "degrees": 1.4,
+      "pivot": "top",
+      "follow_bounce": true
     }
   ],
   "bounce_react_layers": [
     "03Ear_Right.png",
     "12Ear_Left.png"
-  ],
-  "effect_layers": [
-    {
-      "file": "17Drool.png",
-      "effect": "drip",
-      "period": 2.4,
-      "copies": 2,
-      "spread": 0.22,
-      "max_opacity": 0.85
-    }
   ],
   "gaze_layer": "20Iris.png",
   "canvas": [

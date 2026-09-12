@@ -544,13 +544,28 @@ class OverlayWindow(QWidget):
 
             for inst in self.stage.instances:
                 pack = self._pack_for(inst)
+                bounce_offset = self._instance_bounce_offset(inst)
                 if pack.bounce_pivot:
-                    target_angle = BOUNCE_REACT_DEG_PER_PX * self._instance_bounce_offset(inst)
+                    target_angle = BOUNCE_REACT_DEG_PER_PX * bounce_offset
                     for filename in pack.bounce_pivot:
                         current = inst.bounce_react_angle.get(filename, 0.0)
                         inst.bounce_react_angle[filename] = (
                             current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
                         )
+                # sway_layers with follow_bounce (e.g. a drool strand) swing
+                # off the same bounce/talk signal, lag-smoothed the same way
+                # as bounce_pivot above, instead of an independent sine wave
+                # — sharing bounce_react_angle is safe since filenames never
+                # collide between the two groups.
+                for filename, spec in pack.sway_spec.items():
+                    if not spec.follow_bounce:
+                        continue
+                    deg_per_px = spec.degrees if spec.degrees is not None else BOUNCE_REACT_DEG_PER_PX
+                    target_angle = deg_per_px * bounce_offset
+                    current = inst.bounce_react_angle.get(filename, 0.0)
+                    inst.bounce_react_angle[filename] = (
+                        current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
+                    )
                 if pack.model.gaze_layer:
                     self._update_eye_dart(inst, pack)
 
@@ -698,11 +713,17 @@ class OverlayWindow(QWidget):
             react_pivot = pack.bounce_pivot.get(ref) if (self._sway_enabled and kind == "layer") else None
             if sway_pivot is not None:
                 spec = pack.sway_spec.get(ref)
-                degrees = spec.degrees if (spec and spec.degrees is not None) else SWAY_ROTATION_DEG
-                period = spec.period if (spec and spec.period is not None) else SWAY_PERIOD_S
-                angle = degrees * math.sin(
-                    TWO_PI * self._clock_s / period + pack.sway_phase[ref] + inst.motion_phase_offset
-                )
+                if spec and spec.follow_bounce:
+                    # Driven by the bounce/talk signal (see _on_animation_tick),
+                    # not an independent clock — a drool strand should swing
+                    # because the avatar is bouncing/talking, not regardless.
+                    angle = inst.bounce_react_angle.get(ref, 0.0)
+                else:
+                    degrees = spec.degrees if (spec and spec.degrees is not None) else SWAY_ROTATION_DEG
+                    period = spec.period if (spec and spec.period is not None) else SWAY_PERIOD_S
+                    angle = degrees * math.sin(
+                        TWO_PI * self._clock_s / period + pack.sway_phase[ref] + inst.motion_phase_offset
+                    )
             elif react_pivot is not None:
                 angle = inst.bounce_react_angle.get(ref, 0.0)
             else:

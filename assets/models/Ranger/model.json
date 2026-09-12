@@ -29,6 +29,12 @@
       "degrees": 10,
       "period": 1.6,
       "pivot": "bottom"
+    },
+    {
+      "file": "18Emitter.png",
+      "degrees": 10,
+      "period": 1.6,
+      "pivot_ref": "16Antenna.png"
     }
   ],
   "bounce_react_layers": [

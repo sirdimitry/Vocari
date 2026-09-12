@@ -93,6 +93,15 @@ class SwaySpec:
     # to move in perfect sync. That layer must appear earlier in the
     # manifest's sway_layers list.
     pivot_ref: str | None = None
+    # Swing driven by how much the avatar is currently bouncing (talking, or
+    # the idle bob) instead of an independent sine wave on its own clock -
+    # for a loose part that should visibly react to speech/movement (e.g. a
+    # drool strand) rather than swaying regardless of whether the avatar is
+    # even talking. Uses the same lag-smoothed motion as bounce_react_layers;
+    # `degrees` here means degrees of swing per px of bounce offset (falls
+    # back to the renderer's bounce_react default when None); `period` is
+    # unused for this mode.
+    follow_bounce: bool = False
 
 
 @dataclass
@@ -174,6 +183,7 @@ def load_model(directory: Path) -> AvatarModel:
                 period=entry.get("period"),
                 pivot=entry.get("pivot", "bottom"),
                 pivot_ref=entry.get("pivot_ref"),
+                follow_bounce=bool(entry.get("follow_bounce", False)),
             ))
 
     effects: list[EffectSpec] = []

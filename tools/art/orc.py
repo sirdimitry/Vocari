@@ -599,21 +599,17 @@ MANIFEST = {
         "eyes": {"order": 6, "open": "06Eyes_Open.png", "closed": "07Eyes_Closed.png"},
         "mouth": {"order": 7, "open": "09Mouth_Open.png", "closed": "10Mouth_Closed.png"},
     },
-    # The leather-tied topknot rocks like a loose cap slipping on the head;
-    # the drool strand swings from where it's attached at the tusk (pivot
-    # "top" — it hangs down, so rotating around its lowest pixel would swing
-    # the wrong end).
+    # The leather-tied topknot rocks like a loose cap slipping on the head.
+    # The drool strand hangs from the tusk (pivot "top" — it hangs down, so
+    # rotating around its lowest pixel would swing the wrong end) and swings
+    # off the bounce/talk signal instead of its own clock, so it visibly
+    # reacts to the orc actually bouncing/talking rather than swaying
+    # regardless — just the one strand, no separate detaching-drop effect.
     "sway_layers": [
         {"file": "16Topknot.png", "degrees": 9, "period": 3.4, "pivot": "bottom"},
-        {"file": "17Drool.png", "degrees": 6, "period": 2.1, "pivot": "top"},
+        {"file": "17Drool.png", "degrees": 1.4, "pivot": "top", "follow_bounce": True},
     ],
     "bounce_react_layers": ["03Ear_Right.png", "12Ear_Left.png"],
-    # A fresh droplet detaches from the strand and falls every couple of
-    # seconds, fading out before it reaches the chest.
-    "effect_layers": [
-        {"file": "17Drool.png", "effect": "drip", "period": 2.4, "copies": 2,
-         "spread": 0.22, "max_opacity": 0.85},
-    ],
     # A nervous, wandering gaze: only the iris moves, the socket stays put.
     "gaze_layer": "20Iris.png",
 }
