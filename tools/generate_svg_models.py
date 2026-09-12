@@ -1,7 +1,10 @@
-"""Renders the bundled avatar models from the SVG art modules in tools/art/.
+"""Renders the bundled avatar models from the art modules in tools/art/.
 
-Each model module (tools/art/orc.py, ranger.py, coder.py) exports:
-  LAYERS    filename -> callable returning a tools.art.svgkit.Layer
+Each model module exports:
+  LAYERS    filename -> callable returning either a tools.art.svgkit.Layer
+            (rasterized through headless Chromium - see orc.py, ranger.py)
+            or a QImage already at the shared canvas size (the pixel-art
+            route - see coder_pixel.py, tools/art/pixel.py)
   MANIFEST  the model.json payload (canvas is added here, fixed for all models)
 
 Run:  .venv\\Scripts\\python.exe tools\\generate_svg_models.py [name ...]
@@ -15,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
 from tools.art.svgkit import CANVAS, Renderer
@@ -24,7 +28,7 @@ OUT_ROOT = Path(__file__).resolve().parent.parent / "assets" / "models"
 MODELS: dict[str, str] = {
     "Orc": "tools.art.orc",
     "Ranger": "tools.art.ranger",
-    "Coder": "tools.art.coder",
+    "Coder": "tools.art.coder_pixel",
 }
 
 
@@ -38,8 +42,12 @@ def build(name: str, module_path: str, renderer: Renderer) -> None:
         existing.unlink()
 
     for filename, factory in module.LAYERS.items():
-        layer = factory()
-        renderer.render(layer, folder / filename)
+        result = factory()
+        if isinstance(result, QImage):
+            (folder / filename).parent.mkdir(parents=True, exist_ok=True)
+            result.save(str(folder / filename))
+        else:
+            renderer.render(result, folder / filename)
 
     manifest = dict(module.MANIFEST)
     manifest["canvas"] = [CANVAS, CANVAS]

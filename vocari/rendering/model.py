@@ -50,9 +50,12 @@ angle, for the parts that light up rather than move:
 Effect layers still have to appear in `base_layers`; the entry here only adds
 the animation, the manifest's z-order still decides where it is drawn.
 
-`eye_dart` (optional bool) nudges the eye layer around by a few pixels at
-random intervals, so the avatar's gaze wanders instead of staring through
-the viewer.
+`gaze_layer` (optional filename) nudges just that one layer left/right at
+random intervals - a wandering, slightly nervous gaze. It names an iris/pupil
+layer meant to sit *underneath* a socket layer that has a matching hole
+punched in it (see tools/art/face.py's eye_socket_open()/eye_iris()), so only
+the iris moves and the sclera/lashes stay put - unlike translating a whole
+combined eye pixmap, which would drag the lid shape across the face too.
 
 `bounce_react_layers` (optional) names layers that should additionally
 rotate around their own attachment point when the avatar bounces (talking,
@@ -107,7 +110,7 @@ class AvatarModel:
     sway: list[SwaySpec] = field(default_factory=list)
     bounce_react_layers: list[str] = field(default_factory=list)
     effects: list[EffectSpec] = field(default_factory=list)
-    eye_dart: bool = False
+    gaze_layer: str | None = None
 
     @property
     def sway_layers(self) -> list[str]:
@@ -186,5 +189,5 @@ def load_model(directory: Path) -> AvatarModel:
         sway=sway,
         bounce_react_layers=list(data.get("bounce_react_layers", [])),
         effects=effects,
-        eye_dart=bool(data.get("eye_dart", False)),
+        gaze_layer=data.get("gaze_layer"),
     )

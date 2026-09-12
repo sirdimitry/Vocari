@@ -4,8 +4,6 @@
     "01Back.png",
     "17HairBack.png",
     "02Body.png",
-    "03Ear_Right.png",
-    "12Ear_Left.png",
     "05Head.png",
     "08Brows.png",
     "19EyeShine.png",
@@ -14,12 +12,12 @@
   ],
   "states": {
     "eyes": {
-      "order": 7,
+      "order": 5,
       "open": "06Eyes_Open.png",
       "closed": "07Eyes_Closed.png"
     },
     "mouth": {
-      "order": 8,
+      "order": 6,
       "open": "09Mouth_Open.png",
       "closed": "10Mouth_Closed.png"
     }
@@ -37,10 +35,6 @@
       "period": 2.3,
       "pivot": "top"
     }
-  ],
-  "bounce_react_layers": [
-    "03Ear_Right.png",
-    "12Ear_Left.png"
   ],
   "effect_layers": [
     {

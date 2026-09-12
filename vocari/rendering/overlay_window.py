@@ -524,24 +524,21 @@ class OverlayWindow(QWidget):
                         inst.bounce_react_angle[filename] = (
                             current + (target_angle - current) * BOUNCE_REACT_LAG_COEFF
                         )
-                if pack.model.eye_dart:
+                if pack.model.gaze_layer:
                     self._update_eye_dart(inst, pack)
 
         self.update()
 
     def _update_eye_dart(self, inst: AvatarInstance, pack: "ModelPack") -> None:
-        """Nudges the whole eye layer a few pixels toward a randomly-picked
-        glance target, holding it there for a bit before rolling a new one —
-        a wandering gaze instead of a fixed stare. Cheap: it only shifts where
-        the already-drawn eye pixmap is painted, no extra art needed."""
-        eye_h = None
-        eyes_group = pack.model.states.get("eyes")
-        if eyes_group is not None:
-            sample = next(iter(eyes_group.frames.values()), None)
-            pixmap = pack.pixmaps.get(sample) if sample else None
-            if pixmap is not None:
-                eye_h = pixmap.height()
-        amplitude = (eye_h or pack.model.canvas_size[1] * 0.1) * 0.05
+        """Nudges just the gaze_layer (the iris/pupil art) a few pixels toward
+        a randomly-picked glance target, holding it there for a bit before
+        rolling a new one — a wandering, slightly nervous gaze. The lids and
+        sclera live on a *different* layer and never move; see
+        face.eye_socket_open()/eye_iris() for how the two line up."""
+        # Every layer PNG is the model's full canvas regardless of how little
+        # of it is opaque, so there's no useful "eye size" to read off a
+        # pixmap here — a fraction of the canvas is the right knob instead.
+        amplitude = pack.model.canvas_size[1] * 0.018
 
         inst.eye_look_hold_s -= ANIMATION_INTERVAL_MS / 1000
         if inst.eye_look_hold_s <= 0:
@@ -664,9 +661,9 @@ class OverlayWindow(QWidget):
             y_offset = bounce_offset
             x_offset = 0.0
 
-            # Wandering gaze: shifts the whole eye pixmap by a few px instead
-            # of needing separate iris art — see _update_eye_dart().
-            if kind == "state" and ref == "eyes" and self._sway_enabled and pack.model.eye_dart:
+            # Wandering gaze: nudges just the iris layer, not the whole eye —
+            # see _update_eye_dart() and AvatarModel.gaze_layer.
+            if kind == "layer" and self._sway_enabled and ref == pack.model.gaze_layer:
                 x_offset += inst.eye_look[0]
                 y_offset += inst.eye_look[1]
 

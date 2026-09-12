@@ -234,15 +234,35 @@ def ear(side: int) -> Layer:
     return layer
 
 
+EYE_SPEC = face.EyeSpec(
+    cx=CX - EYE_DX, cy=EYE_Y, w=178, h=104,
+    iris_light="#ffd14a", iris_dark="#d2521a", iris_rim="#5e1607",
+    pupil="#160a06", sclera_light="#fff4cf", sclera_shade="#dcc37f",
+    lash=LINE, lash_width=15, lid_lift=0.30, iris_scale=0.82,
+)
+
+
 def eyes(closed: bool) -> Layer:
+    """Sclera + lids only - the iris is a separate layer (see iris()) so the
+    "eyes dart" animation can slide just the pupil inside a fixed socket
+    instead of sliding the whole eye (lashes included) across the face."""
     layer = Layer("eyes")
-    spec = face.EyeSpec(
-        cx=CX - EYE_DX, cy=EYE_Y, w=178, h=104,
-        iris_light="#ffd14a", iris_dark="#d2521a", iris_rim="#5e1607",
-        pupil="#160a06", sclera_light="#fff4cf", sclera_shade="#dcc37f",
-        lash=LINE, lash_width=15, lid_lift=0.30, iris_scale=0.82,
-    )
-    markup = face.eye_closed(layer, spec) if closed else face.eye_open(layer, spec)
+    if closed:
+        markup = face.eye_closed(layer, EYE_SPEC)
+    else:
+        markup = face.eye_socket_open(layer, EYE_SPEC)
+    layer.raw(markup)
+    layer.group(markup, transform=mirror(CX))
+    return layer
+
+
+def iris() -> Layer:
+    """The gaze_layer: drawn underneath the open-eye socket so it peeks
+    through the hole punched there, and nudged left/right by the renderer for
+    a wandering, slightly nervous look. Not drawn at all during a blink -
+    the closed lid (on top, in z-order) fully covers this layer's area."""
+    layer = Layer("iris")
+    markup = face.eye_iris(layer, EYE_SPEC)
     layer.raw(markup)
     layer.group(markup, transform=mirror(CX))
     return layer
@@ -555,6 +575,7 @@ LAYERS = {
     "03Ear_Right.png": lambda: ear(1),
     "12Ear_Left.png": lambda: ear(-1),
     "05Head.png": head,
+    "20Iris.png": iris,
     "06Eyes_Open.png": lambda: eyes(False),
     "07Eyes_Closed.png": lambda: eyes(True),
     "08Brows.png": brows,
@@ -567,12 +588,16 @@ LAYERS = {
 MANIFEST = {
     "name": "Orc",
     "base_layers": [
+        # 20Iris.png sits right before the eyes state so it renders
+        # underneath it - the open-eye socket has a hole punched in it that
+        # this shows through, and the closed-eye lid fully covers it during
+        # a blink. See gaze_layer below.
         "01Back.png", "02Body.png", "03Ear_Right.png", "12Ear_Left.png",
-        "05Head.png", "08Brows.png", "16Topknot.png", "17Drool.png",
+        "05Head.png", "20Iris.png", "08Brows.png", "16Topknot.png", "17Drool.png",
     ],
     "states": {
-        "eyes": {"order": 5, "open": "06Eyes_Open.png", "closed": "07Eyes_Closed.png"},
-        "mouth": {"order": 6, "open": "09Mouth_Open.png", "closed": "10Mouth_Closed.png"},
+        "eyes": {"order": 6, "open": "06Eyes_Open.png", "closed": "07Eyes_Closed.png"},
+        "mouth": {"order": 7, "open": "09Mouth_Open.png", "closed": "10Mouth_Closed.png"},
     },
     # The leather-tied topknot rocks like a loose cap slipping on the head;
     # the drool strand swings from where it's attached at the tusk (pivot
@@ -589,5 +614,6 @@ MANIFEST = {
         {"file": "17Drool.png", "effect": "drip", "period": 2.4, "copies": 2,
          "spread": 0.22, "max_opacity": 0.85},
     ],
-    "eye_dart": True,
+    # A nervous, wandering gaze: only the iris moves, the socket stays put.
+    "gaze_layer": "20Iris.png",
 }

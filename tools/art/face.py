@@ -177,6 +177,139 @@ def eye_open(layer: Layer, spec: EyeSpec) -> str:
     return layer.take(g)
 
 
+def _iris_hole_circle(cx: float, cy: float, r: float) -> str:
+    """A circle written as two arcs, meant to be appended to another path's
+    data with fill-rule="evenodd" so it punches a transparent hole rather than
+    filling solid - see eye_socket_open()."""
+    return (
+        f"M {fmt(cx - r)},{fmt(cy)} "
+        f"A {fmt(r)},{fmt(r)} 0 1 0 {fmt(cx + r)},{fmt(cy)} "
+        f"A {fmt(r)},{fmt(r)} 0 1 0 {fmt(cx - r)},{fmt(cy)} Z"
+    )
+
+
+def eye_socket_open(layer: Layer, spec: EyeSpec) -> str:
+    """The open eye MINUS the iris/pupil: sclera, lid shadow and lashes only,
+    with a transparent hole punched where the iris sits (via an evenodd
+    fill-rule combining the eye opening with a circle). Meant to be paired
+    with eye_iris() drawn on a separate layer underneath, so the renderer can
+    nudge just the iris left/right for a "nervous glance" (AvatarModel.
+    gaze_layer) without sliding the whole eye - including its lashes - across
+    the face."""
+    g = layer.sub()
+    cx, cy = spec.cx, spec.cy
+    hw, hh = spec.w / 2, spec.h / 2
+    opening = _opening(spec)
+    clip = g.clip(opening)
+
+    icx = cx + spec.look_x
+    icy = cy - hh * 0.04 + spec.look_y
+    ir = hh * spec.iris_scale
+    hole_r = ir * 1.18  # a little slack so the iris isn't clipped at rest
+
+    sclera = g.linear(
+        [(0.0, spec.sclera_shade), (0.45, spec.sclera_light), (1.0, spec.sclera_light)],
+        cx, cy - hh, cx, cy + hh,
+    )
+    g.draw(opening + " " + _iris_hole_circle(icx, icy, hole_r), fill=sclera,
+           extra='fill-rule="evenodd"')
+    # A soft rim around the hole, so the punched edge doesn't read as a flat
+    # cutout - the iris still gets a hint of ambient shadow from the socket.
+    g.raw(
+        f'<circle cx="{fmt(icx)}" cy="{fmt(icy)}" r="{fmt(hole_r)}" fill="none" '
+        f'stroke="{spec.sclera_shade}" stroke-width="{fmt(hole_r * 0.12)}" opacity="0.5"/>'
+    )
+
+    # Shadow cast by the upper lid onto the eyeball (still relevant with no
+    # iris drawn here - it now falls on whatever iris peeks through the hole).
+    g.draw(
+        f"M {fmt(cx - hw)},{fmt(cy - hh * 1.3)} L {fmt(cx + hw)},{fmt(cy - hh * 1.3)} "
+        f"L {fmt(cx + hw)},{fmt(cy - hh * 0.05)} "
+        f"C {fmt(cx + hw * 0.4)},{fmt(cy - hh * 0.34)} "
+        f"{fmt(cx - hw * 0.4)},{fmt(cy - hh * 0.34)} "
+        f"{fmt(cx - hw)},{fmt(cy - hh * 0.02)} Z",
+        fill="#101018", opacity=0.26, blur=g.blur(hh * 0.10), clip=clip,
+    )
+
+    # Lash line: a heavy upper lid stroke plus a flick past the outer corner.
+    lid = _upper_lid(spec)
+    g.draw(lid, stroke=spec.lash, width=spec.lash_width, fill="none")
+    g.draw(
+        f"M {fmt(cx - hw * 1.02)},{fmt(cy - hh * spec.lid_lift - spec.lash_width * 0.2)} "
+        f"C {fmt(cx - hw * 1.16)},{fmt(cy - hh * 0.52)} "
+        f"{fmt(cx - hw * 1.18)},{fmt(cy - hh * 0.86)} "
+        f"{fmt(cx - hw * 1.30)},{fmt(cy - hh * 1.15)} "
+        f"C {fmt(cx - hw * 1.02)},{fmt(cy - hh * 0.98)} "
+        f"{fmt(cx - hw * 0.90)},{fmt(cy - hh * 0.62)} "
+        f"{fmt(cx - hw * 0.84)},{fmt(cy - hh * 0.30)} Z",
+        fill=spec.lash,
+    )
+    # Lower lid: thinner and warmer, it should never match the lash weight.
+    g.draw(
+        f"M {fmt(cx - hw * 0.62)},{fmt(cy + hh * 0.70)} "
+        f"C {fmt(cx - hw * 0.1)},{fmt(cy + hh * 1.02)} "
+        f"{fmt(cx + hw * 0.62)},{fmt(cy + hh * 0.74)} "
+        f"{fmt(cx + hw * 0.98)},{fmt(cy + hh * 0.26)}",
+        stroke=spec.lash, width=spec.lash_width * 0.38, fill="none", opacity=0.75,
+    )
+    return layer.take(g)
+
+
+def eye_iris(layer: Layer, spec: EyeSpec) -> str:
+    """Just the iris/pupil/catchlights, drawn at spec's neutral position - the
+    layer this produces is meant to sit *underneath* eye_socket_open() in the
+    z-order and be the one the renderer's eye_dart nudges left/right, so the
+    lids and sclera stay put while the gaze wanders (a "nervous" look)."""
+    g = layer.sub()
+    cx, cy = spec.cx, spec.cy
+    hh = spec.h / 2
+    icx = cx + spec.look_x
+    icy = cy - hh * 0.04 + spec.look_y
+    ir = hh * spec.iris_scale
+    # A generous round clip - not the lens shape, since this layer is meant to
+    # slide independently of it and would look cut off against a fixed lens.
+    clip = g.clip(_iris_hole_circle(icx, icy, ir * 1.3))
+
+    if spec.glow:
+        g.ellipse(icx, icy, ir * 1.5, ir * 1.5, spec.glow, opacity=0.55,
+                  blur=g.blur(ir * 0.45), clip=clip)
+
+    iris = g.radial(
+        [(0.0, spec.iris_light), (0.55, spec.iris_dark), (1.0, spec.iris_rim)],
+        icx, icy + ir * 0.35, ir * 1.25,
+    )
+    g.ellipse(icx, icy, ir, ir, iris, clip=clip)
+    g.ellipse(icx, icy + ir * 0.42, ir * 0.72, ir * 0.44, spec.iris_light,
+              opacity=0.75, blur=g.blur(ir * 0.12), clip=clip)
+    spokes = []
+    for i in range(12):
+        angle = i * 30
+        spokes.append(
+            f'<line x1="{fmt(icx)}" y1="{fmt(icy)}" '
+            f'x2="{fmt(icx)}" y2="{fmt(icy - ir * 0.86)}" '
+            f'transform="rotate({angle} {fmt(icx)} {fmt(icy)})"/>'
+        )
+    g.raw(
+        f'<g stroke="{spec.iris_rim}" stroke-width="{fmt(ir * 0.075)}" opacity="0.28" '
+        f'clip-path="url(#{clip})">{"".join(spokes)}</g>'
+    )
+    g.raw(
+        f'<ellipse cx="{fmt(icx)}" cy="{fmt(icy)}" rx="{fmt(ir)}" ry="{fmt(ir)}" '
+        f'fill="none" stroke="{spec.iris_rim}" stroke-width="{fmt(ir * 0.16)}" '
+        f'opacity="0.85" clip-path="url(#{clip})"/>'
+    )
+    g.ellipse(icx, icy, ir * 0.44, ir * 0.5, spec.pupil, clip=clip)
+
+    if spec.highlight > 0:
+        g.ellipse(icx - ir * 0.34, icy - ir * 0.40, ir * 0.32, ir * 0.26, "#ffffff",
+                  opacity=0.95 * spec.highlight, rotate=-20, clip=clip)
+        g.ellipse(icx + ir * 0.36, icy + ir * 0.34, ir * 0.15, ir * 0.13, "#ffffff",
+                  opacity=0.70 * spec.highlight, clip=clip)
+        g.ellipse(icx - ir * 0.10, icy + ir * 0.62, ir * 0.40, ir * 0.14, "#ffffff",
+                  opacity=0.30 * spec.highlight, blur=g.blur(ir * 0.10), clip=clip)
+    return layer.take(g)
+
+
 def eye_closed(layer: Layer, spec: EyeSpec) -> str:
     """The blink frame: lids meeting in a relaxed downward arc, with the same
     lash flick as the open eye so the corner does not jump between frames."""

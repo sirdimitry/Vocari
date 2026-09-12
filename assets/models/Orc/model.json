@@ -6,18 +6,19 @@
     "03Ear_Right.png",
     "12Ear_Left.png",
     "05Head.png",
+    "20Iris.png",
     "08Brows.png",
     "16Topknot.png",
     "17Drool.png"
   ],
   "states": {
     "eyes": {
-      "order": 5,
+      "order": 6,
       "open": "06Eyes_Open.png",
       "closed": "07Eyes_Closed.png"
     },
     "mouth": {
-      "order": 6,
+      "order": 7,
       "open": "09Mouth_Open.png",
       "closed": "10Mouth_Closed.png"
     }
@@ -50,7 +51,7 @@
       "max_opacity": 0.85
     }
   ],
-  "eye_dart": true,
+  "gaze_layer": "20Iris.png",
   "canvas": [
     1280,
     1280
