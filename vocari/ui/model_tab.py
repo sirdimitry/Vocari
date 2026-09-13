@@ -9,6 +9,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -28,6 +29,7 @@ from vocari.logging_setup import get_logger
 from vocari.paths import app_root
 from vocari.rendering.model import AvatarModel
 from vocari.rendering.model_import import import_model_from_folder
+from vocari.ui.layer_order_dialog import LayerOrderDialog
 from vocari.ui.screen_preview import ScreenPreviewWidget
 from vocari.ui.widgets import CheckableModelCombo, ToggleSwitch
 
@@ -61,6 +63,7 @@ class ModelTab(QWidget):
     ):
         super().__init__()
         self.config = config
+        self.model = model
         self.on_model_imported = on_model_imported
         self.on_position_changed = on_position_changed
         self.on_scale_changed = on_scale_changed
@@ -141,9 +144,15 @@ class ModelTab(QWidget):
         self.current_label = QLabel(f"Текущая модель: {self.config.overlay.model_path}")
         layout.addWidget(self.current_label)
 
+        buttons_row = QHBoxLayout()
         choose_button = QPushButton("Выбрать папку со своей моделью…")
         choose_button.clicked.connect(self._choose_folder)
-        layout.addWidget(choose_button)
+        buttons_row.addWidget(choose_button)
+
+        order_button = QPushButton("Порядок слоёв…")
+        order_button.clicked.connect(self._open_layer_order_dialog)
+        buttons_row.addWidget(order_button)
+        layout.addLayout(buttons_row)
 
         hint = QLabel(
             "Укажите папку с PNG-слоями (все на одном холсте одного размера). "
@@ -449,7 +458,21 @@ class ModelTab(QWidget):
         )
         self.on_model_imported(result.target_dir)
 
+    def _open_layer_order_dialog(self) -> None:
+        dialog = LayerOrderDialog(self.model, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Reuses the same hot-reload path as importing a folder — it
+            # already does exactly what's needed here: re-run load_model()
+            # on this directory and push the fresh AvatarModel into both the
+            # live overlay and this tab (-> set_model() below).
+            self.on_model_imported(self.model.directory)
+            self.status_label.setStyleSheet("color:#2ecc71;")
+            self.status_label.setText(f"Порядок слоёв модели «{self.model.name}» обновлён.")
+
     def set_model(self, model: AvatarModel) -> None:
         """Keeps the preview's canvas size in sync after a hot-swapped model
-        import (see main.py's on_model_imported)."""
+        import (see main.py's on_model_imported), and keeps self.model itself
+        current so "Порядок слоёв..." always edits whichever model is
+        actually active right now."""
+        self.model = model
         self.preview.set_model(model)
