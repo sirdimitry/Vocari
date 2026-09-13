@@ -18,14 +18,62 @@
 # created fresh next to whatever copy of Vocari.exe is running (never
 # inside the build itself).
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
+
+# omegaconf (+ its own deps) is a real requirements.txt dependency, but
+# nothing in vocari's own code imports it directly - it's only reached from
+# *inside* the Silero model's code, which torch.hub downloads from GitHub at
+# runtime (see silero_provider.py), so PyInstaller's static analysis has no
+# way to see that need on its own and silently drops it.
+#
+# The big list below is every stdlib top-level module `import torch` (plus
+# loading/running an actual Silero model through it) touches, computed
+# empirically by diffing sys.modules before/after against a normal install -
+# torch itself is excluded from this build (see `excludes` below), so
+# PyInstaller's own static analysis never sees any of this and would
+# otherwise silently drop every one of them, exactly like omegaconf above.
+#
+# Each name goes through collect_submodules() rather than being listed bare:
+# a bare package name in hiddenimports does NOT recursively pull in its
+# submodules, only whatever PyInstaller's own analysis happens to discover
+# elsewhere - `xml` for instance was already getting bundled (something else
+# needs xml.sax), but only that partial slice, and Python resolves `import
+# xml.etree` through the *already-imported* xml package's own __path__, not
+# through sys.path - so even a complete, separate copy sitting elsewhere on
+# sys.path (the runtime_deps download's supplementary stdlib copy - see
+# vocari/runtime_deps.py) never gets consulted once xml itself has already
+# resolved from an incomplete source. collect_submodules() sidesteps that
+# entirely by making PyInstaller bundle the real, complete package itself;
+# it's a no-op (returns just the name) for plain, non-package modules.
+_STDLIB_FOR_TORCH = [
+    '__future__', 'argparse', 'ast', 'asyncio', 'atexit', 'base64',
+    'binascii', 'bisect', 'bz2', 'calendar', 'cmath', 'collections',
+    'concurrent', 'contextlib', 'contextvars', 'copy', 'copyreg', 'csv',
+    'ctypes', 'dataclasses', 'datetime', 'difflib', 'dis', 'email',
+    'enum', 'errno', 'fnmatch', 'functools', 'gc', 'gettext', 'glob',
+    'gzip', 'hashlib', 'heapq', 'http', 'importlib', 'inspect',
+    'ipaddress', 'itertools', 'json', 'keyword', 'linecache', 'locale',
+    'logging', 'lzma', 'math', 'msvcrt', 'multiprocessing', 'numbers',
+    'opcode', 'operator', 'pathlib', 'pickle', 'pickletools', 'pkgutil',
+    'platform', 'posixpath', 'pprint', 'queue', 'quopri', 'random',
+    're', 'reprlib', 'runpy', 'select', 'selectors', 'shutil', 'signal',
+    'socket', 'ssl', 'string', 'struct', 'subprocess', 'sysconfig',
+    'tarfile', 'tempfile', 'textwrap', 'threading', 'timeit', 'token',
+    'tokenize', 'traceback', 'types', 'typing', 'unittest', 'urllib',
+    'uuid', 'warnings', 'weakref', 'xml', 'zipfile', 'zlib',
+]
+_hidden_imports = ['omegaconf', 'antlr4', 'yaml']
+for _name in _STDLIB_FOR_TORCH:
+    _hidden_imports += collect_submodules(_name)
 
 a = Analysis(
     ['run_vocari.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=_hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -15,10 +15,24 @@ it's been downloaded, with no special-casing needed at each call site.
 
 The download is one pre-built zip (torch + its exact runtime dependency
 closure — torchgen, filelock, fsspec, jinja2, markupsafe, mpmath, networkx,
-sympy, typing_extensions — pinned to the versions this app was tested
-against) hosted as a GitHub release asset, not a live pip/PyPI resolve:
-reimplementing dependency resolution here would be its own source of
-breakage, and a fixed asset is exactly reproducible.
+sympy, typing_extensions, PLUS the full CPython 3.12 standard library, minus
+test/tkinter/idlelib/lib2to3 — see below for why) hosted as a GitHub release
+asset, not a live pip/PyPI resolve: reimplementing dependency resolution
+here would be its own source of breakage, and a fixed asset is exactly
+reproducible.
+
+Why the stdlib is in there too: torch itself, and the actual Silero model
+code it loads via torch.hub, both reach for stdlib modules (timeit,
+xml.etree, ...) that nothing in Vocari's own code ever imports — since
+torch is excluded from this build (see vocari.spec), PyInstaller's static
+analysis never sees that need and silently drops those modules, which
+surfaced as ModuleNotFoundError deep inside torch.hub.load() the first time
+this shipped (RuntimeDep.version 1 -> 2). vocari.spec also force-bundles
+the same list directly (via collect_submodules(), not bare names — a bare
+package name in hiddenimports doesn't pull in its submodules, and a
+same-named package that's already partially bundled from something else
+takes priority via its own __path__ regardless of what's on sys.path), so
+this stdlib copy here is a second line of defense for anything that isn't.
 """
 from __future__ import annotations
 
@@ -41,13 +55,22 @@ class RuntimeDep:
     dir_name: str  # subfolder under runtime_deps/
     url: str
     approx_size_mb: int
+    # Bumped whenever the hosted zip's *contents* change (not just its
+    # bytes/URL) — e.g. adding a missing stdlib module the first cut of this
+    # bundle turned out not to include. The marker file records which
+    # version produced it, so a machine that already downloaded an older,
+    # broken bundle re-downloads automatically instead of is_downloaded()
+    # trusting stale content forever just because a folder with that name
+    # exists.
+    version: int = 1
 
 
 TORCH_CPU = RuntimeDep(
     label="PyTorch (офлайн-голоса Silero)",
     dir_name="torch_cpu",
     url="https://github.com/sirdimitry/Vocari/releases/download/runtime-deps-torch-cpu-v1/torch_cpu_win_amd64_py312.zip",
-    approx_size_mb=175,
+    approx_size_mb=160,
+    version=2,  # v2: bundles the full stdlib + omegaconf's deps too - v1 was missing timeit/xml.etree/omegaconf etc.
 )
 
 
@@ -60,7 +83,14 @@ def _marker(dep: RuntimeDep) -> Path:
 
 
 def is_downloaded(dep: RuntimeDep) -> bool:
-    return _marker(dep).exists()
+    marker = _marker(dep)
+    if not marker.exists():
+        return False
+    try:
+        recorded_version = int(marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False  # marker from before versioning existed, or corrupted — treat as stale
+    return recorded_version == dep.version
 
 
 def ensure_on_path(dep: RuntimeDep) -> None:
@@ -110,7 +140,7 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
         target.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(tmp_zip) as zf:
             zf.extractall(target)
-        _marker(dep).touch()
+        _marker(dep).write_text(str(dep.version), encoding="utf-8")
     finally:
         tmp_zip.unlink(missing_ok=True)
 
