@@ -13,7 +13,10 @@ omegaconf>=2.3
 
 # torch (for the Silero TTS provider) is intentionally NOT listed here — a
 # plain `pip install torch` pulls a large CUDA-bundled build by default on
-# Windows even on machines with no NVIDIA GPU at all. Install the CPU-only
-# build explicitly instead (works identically regardless of GPU vendor):
+# Windows even on machines with no NVIDIA GPU at all. For dev work, install
+# the CPU-only build explicitly instead (works identically regardless of GPU
+# vendor):
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
-# See README "Установка" for the full command.
+# See README "Установка" for the full command. End users of the packaged
+# .exe never need this — Settings -> Silero downloads an equivalent
+# prebuilt bundle on demand instead (see vocari/runtime_deps.py).

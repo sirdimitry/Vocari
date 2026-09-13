@@ -1,17 +1,43 @@
 """Settings -> "Silero": preload the local/offline TTS models ahead of time
 so the first real message doesn't pay the download+warm-up cost. Loading
-and inference run on a background QThread — both are blocking calls."""
+and inference run on a background QThread — both are blocking calls.
+
+If torch itself isn't available yet (the packaged build doesn't bundle it —
+see vocari/runtime_deps.py), this shows a one-time download button instead
+of the per-language preload rows; the app needs a restart afterwards to pick
+it up (torch does a lot of native-library loading at process start that
+isn't worth trying to redo mid-run for what's a rare, one-off event)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+import sys
+
+from PySide6.QtCore import QObject, QProcess, QThread, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from vocari.logging_setup import get_logger
+from vocari.runtime_deps import TORCH_CPU, download, ensure_on_path
 from vocari.tts.silero_provider import SileroTTSProvider
 
 logger = get_logger("tts.silero_tab")
 
 LANGUAGES = [("ru", "Русский (v4_ru)"), ("en", "English (v3_en)")]
+
+
+def _torch_available() -> bool:
+    ensure_on_path(TORCH_CPU)
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 class _PreloadWorker(QObject):
@@ -32,6 +58,19 @@ class _PreloadWorker(QObject):
             self.finished.emit(self.lang, "", str(exc))
 
 
+class _TorchDownloadWorker(QObject):
+    progress = Signal(int, int)  # downloaded_bytes, total_bytes (0 = unknown)
+    finished = Signal(str)  # error message, "" on success
+
+    def run(self) -> None:
+        try:
+            download(TORCH_CPU, lambda done, total: self.progress.emit(done, total))
+            self.finished.emit("")
+        except Exception as exc:  # noqa: BLE001 - surface any network/disk error to the UI
+            logger.exception("Не удалось скачать PyTorch")
+            self.finished.emit(str(exc))
+
+
 class SileroTab(QWidget):
     def __init__(self, provider: SileroTTSProvider):
         super().__init__()
@@ -39,8 +78,16 @@ class SileroTab(QWidget):
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, _PreloadWorker] = {}
 
-        layout = QVBoxLayout(self)
+        self.layout_ = QVBoxLayout(self)
 
+        if _torch_available():
+            self._build_preload_ui()
+        else:
+            self._build_torch_download_ui()
+
+    # -- normal mode: torch already available --------------------------------
+
+    def _build_preload_ui(self) -> None:
         intro = QLabel(
             "Silero — бесплатный офлайн-синтез речи: модель скачивается один раз "
             "(десятки МБ) и дальше работает на процессоре без интернета и без "
@@ -49,7 +96,7 @@ class SileroTab(QWidget):
             "заранее, чтобы озвучка сразу была быстрой."
         )
         intro.setWordWrap(True)
-        layout.addWidget(intro)
+        self.layout_.addWidget(intro)
 
         self.status_labels: dict[str, QLabel] = {}
         self.preload_buttons: dict[str, QPushButton] = {}
@@ -69,7 +116,7 @@ class SileroTab(QWidget):
             self.preload_buttons[lang] = button
             row.addWidget(button)
 
-            layout.addLayout(row)
+            self.layout_.addLayout(row)
 
         compat_note = QLabel(
             "Работает строго на CPU — одинаково на любом железе (Intel/AMD, "
@@ -79,9 +126,9 @@ class SileroTab(QWidget):
         )
         compat_note.setWordWrap(True)
         compat_note.setStyleSheet("color: gray; font-size: 11px; margin-top: 8px;")
-        layout.addWidget(compat_note)
+        self.layout_.addWidget(compat_note)
 
-        layout.addStretch()
+        self.layout_.addStretch()
 
     def _start_preload(self, lang: str) -> None:
         if self.provider.is_loaded(lang):
@@ -113,3 +160,91 @@ class SileroTab(QWidget):
         self.status_labels[lang].setText(f"готова ({speaker_count} голосов)")
         self.preload_buttons[lang].setEnabled(False)
         self.preload_buttons[lang].setText("Загружена")
+
+    # -- first-run mode: torch needs downloading -----------------------------
+
+    def _build_torch_download_ui(self) -> None:
+        intro = QLabel(
+            f"Офлайн-голоса Silero используют PyTorch — он не входит в "
+            f"установщик (чтобы не раздувать его для всех, даже тех, кто "
+            f"голосами Silero не пользуется), а скачивается один раз отдельно, "
+            f"~{TORCH_CPU.approx_size_mb} МБ. После скачивания понадобится "
+            f"перезапустить Vocari — дальше всё работает полностью офлайн, "
+            f"без интернета и без повторных запросов."
+        )
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+
+        self.download_status = QLabel("")
+        self.download_status.setWordWrap(True)
+        self.layout_.addWidget(self.download_status)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.hide()
+        self.layout_.addWidget(self.progress_bar)
+
+        button_row = QHBoxLayout()
+        self.download_button = QPushButton(f"Скачать офлайн-голоса (~{TORCH_CPU.approx_size_mb} МБ)")
+        self.download_button.clicked.connect(self._start_torch_download)
+        button_row.addWidget(self.download_button)
+
+        self.restart_button = QPushButton("Перезапустить Vocari")
+        self.restart_button.clicked.connect(self._restart_app)
+        self.restart_button.hide()
+        button_row.addWidget(self.restart_button)
+        button_row.addStretch()
+        self.layout_.addLayout(button_row)
+
+        self.layout_.addStretch()
+
+    def _start_torch_download(self) -> None:
+        self.download_button.setEnabled(False)
+        self.progress_bar.setRange(0, 0)  # indeterminate until the first progress signal names a total
+        self.progress_bar.show()
+        self.download_status.setStyleSheet("color: gray;")
+        self.download_status.setText("Скачивание…")
+        logger.info("Запущено скачивание PyTorch для офлайн-голосов Silero")
+
+        thread = QThread(self)
+        worker = _TorchDownloadWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_torch_progress)
+        worker.finished.connect(self._on_torch_download_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._torch_thread = thread
+        self._torch_worker = worker
+        thread.start()
+
+    def _on_torch_progress(self, downloaded: int, total: int) -> None:
+        if total > 0:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(downloaded)
+            self.download_status.setText(f"Скачано {downloaded // (1024 * 1024)} / {total // (1024 * 1024)} МБ")
+        else:
+            self.download_status.setText(f"Скачано {downloaded // (1024 * 1024)} МБ")
+
+    def _on_torch_download_finished(self, error: str) -> None:
+        if error:
+            self.progress_bar.hide()
+            self.download_status.setStyleSheet("color:#ff5c5c;")
+            self.download_status.setText(f"Ошибка загрузки: {error}")
+            self.download_button.setEnabled(True)
+            return
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(1)
+        self.download_status.setStyleSheet("color:#2ecc71;")
+        self.download_status.setText("Готово! Перезапустите Vocari, чтобы включить офлайн-голоса.")
+        self.download_button.hide()
+        self.restart_button.show()
+        logger.info("PyTorch для офлайн-голосов Silero скачан")
+
+    def _restart_app(self) -> None:
+        logger.info("Перезапуск Vocari для включения офлайн-голосов")
+        QProcess.startDetached(sys.executable, sys.argv[1:])
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()

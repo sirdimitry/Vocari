@@ -10,6 +10,7 @@ __pycache__/
 config.json
 logs/
 silero_cache/
+runtime_deps/
 
 # PyInstaller build output (see vocari.spec / README "Сборка .exe")
 build/

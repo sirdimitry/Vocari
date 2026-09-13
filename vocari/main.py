@@ -14,6 +14,7 @@ from vocari.config.settings import AppConfig, OverlayConfig
 from vocari.hotkey import GlobalHotkeyManager
 from vocari.logging_setup import get_logger, setup_logging
 from vocari.paths import app_root
+from vocari.runtime_deps import ensure_all_on_path
 from vocari.rendering.model import AvatarModel, load_model
 from vocari.rendering.overlay_window import MAX_SCALE, MIN_SCALE, OverlayWindow
 from vocari.rendering.stage import Stage
@@ -83,6 +84,12 @@ def _apply_screen_defaults(config: AppConfig, model: AvatarModel) -> None:
 
 
 def main() -> None:
+    # Before anything else — makes a previously-downloaded torch (see
+    # runtime_deps.py / Settings -> Silero) importable again this run. A
+    # dev venv with torch already installed the normal way is unaffected;
+    # this only ever adds a path, never removes torch from view.
+    ensure_all_on_path()
+
     log_file = setup_logging(PROJECT_ROOT)
 
     app = QApplication(sys.argv)

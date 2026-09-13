@@ -7,14 +7,16 @@
 # would make that awkward (files would need copying out on every launch)
 # and slows down startup for no benefit here.
 #
-# torch is excluded on purpose (see requirements.txt's comment on it) —
-# Silero stays an "install torch yourself" optional feature even in the
-# packaged build; the app already shows a friendly error instead of
-# crashing when it's unavailable (see vocari/tts/silero_provider.py).
+# torch is excluded on purpose (see requirements.txt's comment on it) — it's
+# ~600 MB, and bundling it here would make every Vocari user pay that cost
+# even the ones who never touch the offline Silero voices. Settings ->
+# Silero instead downloads a prebuilt torch-CPU bundle on demand (see
+# vocari/runtime_deps.py) into runtime_deps/ next to Vocari.exe.
 #
-# Nothing here ever bundles config.json, logs/, or silero_cache/ — those
-# don't exist until the app actually runs and are created fresh next to
-# whatever copy of Vocari.exe is running (never inside the build itself).
+# Nothing here ever bundles config.json, logs/, silero_cache/, or
+# runtime_deps/ — those don't exist until the app actually runs and are
+# created fresh next to whatever copy of Vocari.exe is running (never
+# inside the build itself).
 
 block_cipher = None
 

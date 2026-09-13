@@ -8,10 +8,13 @@ Unlike EdgeTTSProvider, a model has to be downloaded once (~35-90 MB per
 language, cached under ~/.cache/torch/hub) and loaded into memory before
 synthesis is fast — see preload().
 
-torch is a heavy dependency deliberately left out of requirements.txt (see
-the comment there) — importing it happens lazily inside preload()/synthesize(),
-not at module import time, so the rest of the app (and this module itself)
-stays usable without it installed; only actually using Silero requires it.
+torch is a heavy dependency deliberately left out of requirements.txt and
+the packaged build (see the comment there, and vocari/runtime_deps.py) —
+importing it happens lazily inside preload()/synthesize(), not at module
+import time, so the rest of the app (and this module itself) stays usable
+without it installed; only actually using Silero requires it. Settings ->
+Silero downloads it on demand (runtime_deps.TORCH_CPU) instead of asking
+the user to run pip themselves.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import soundfile as sf
 
 from vocari.logging_setup import get_logger
 from vocari.paths import app_root
+from vocari.runtime_deps import TORCH_CPU, ensure_on_path
 from vocari.tts.base import SynthesisResult, TTSProvider
 
 logger = get_logger("tts.silero")
@@ -38,7 +42,9 @@ WARMUP_TEXT = {"ru": "Проверка.", "en": "Check."}
 # config.json/logs/.
 CACHE_DIR = app_root() / "silero_cache"
 
-TORCH_INSTALL_HINT = "pip install torch --index-url https://download.pytorch.org/whl/cpu"
+TORCH_MISSING_HINT = (
+    "откройте вкладку Silero в настройках и нажмите \"Скачать офлайн-голоса\""
+)
 
 
 class SileroTTSProvider(TTSProvider):
@@ -60,11 +66,13 @@ class SileroTTSProvider(TTSProvider):
         if not model_id:
             raise ValueError(f"Silero: язык '{lang}' не поддерживается")
 
+        ensure_on_path(TORCH_CPU)  # picks up a previously-downloaded torch even if
+        # this is the very first call this run (e.g. main.py hasn't run yet in a test)
         try:
             import torch
         except ImportError as exc:
             raise RuntimeError(
-                f"PyTorch не установлен — Silero работает только с ним. Установите: {TORCH_INSTALL_HINT}"
+                f"PyTorch не установлен — Silero работает только с ним. Чтобы установить: {TORCH_MISSING_HINT}"
             ) from exc
 
         if self._device is None:
