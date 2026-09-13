@@ -243,8 +243,17 @@ class SileroTab(QWidget):
         logger.info("PyTorch для офлайн-голосов Silero скачан")
 
     def _restart_app(self) -> None:
+        # Without this, a second click before the process actually exits
+        # (quit() asks Qt to shut down, it doesn't happen instantly) starts
+        # a second detached process on top of the first one - exactly the
+        # "two Vocari icons in the tray" a user hit.
+        self.restart_button.setEnabled(False)
         logger.info("Перезапуск Vocari для включения офлайн-голосов")
-        QProcess.startDetached(sys.executable, sys.argv[1:])
+        started = QProcess.startDetached(sys.executable, sys.argv[1:])
+        if not started:
+            logger.error("Не удалось запустить новый процесс Vocari при перезапуске")
+            self.restart_button.setEnabled(True)
+            return
         app = QApplication.instance()
         if app is not None:
             app.quit()
