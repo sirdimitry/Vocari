@@ -2,6 +2,7 @@
 position/scale without needing to drag/scroll the transparent window itself."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -21,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vocari.config.settings import AppConfig
+from vocari.config.settings import AppConfig, OverlayConfig
 from vocari.logging_setup import get_logger
 from vocari.paths import app_root
 from vocari.rendering.model import AvatarModel
@@ -32,6 +34,10 @@ from vocari.ui.widgets import CheckableModelCombo, ToggleSwitch
 logger = get_logger("settings_window")
 
 MODELS_ROOT = app_root() / "assets" / "models"
+
+# Shipped with the app itself (repo + installer) — never offered for
+# in-app deletion, only folders the user imported themselves are.
+BUILTIN_MODEL_NAMES = {"Ariral", "Orc", "Ranger", "Coder"}
 
 POSITION_RANGE = 20000  # generous bound for multi-monitor setups
 MIN_SCALE_PERCENT = 10
@@ -100,8 +106,13 @@ class ModelTab(QWidget):
         # story once someone imports many models; this one already has it.
         self.model_combo = CheckableModelCombo()
         self.model_combo.checked_changed.connect(self._on_pool_check_toggled)
+        self.model_combo.delete_requested.connect(self._on_delete_model_requested)
         for name in model_names:
-            self.model_combo.add_item(name, f"assets/models/{name}", name in self.config.overlay.random_pool or not self.config.overlay.random_pool)
+            self.model_combo.add_item(
+                name, f"assets/models/{name}",
+                name in self.config.overlay.random_pool or not self.config.overlay.random_pool,
+                deletable=name not in BUILTIN_MODEL_NAMES,
+            )
         index = self.model_combo.findData(self.config.overlay.model_path)
         self.model_combo.setCurrentIndex(max(0, index))
         self.model_combo.currentIndexChanged.connect(self._on_model_selected)
@@ -119,7 +130,9 @@ class ModelTab(QWidget):
             "(галочка слева от названия — она не меняет активный аватар, "
             "только участие в розыгрыше), так что в очереди одновременно "
             "могут стоять разные персонажи. Если не отмечено ничего — "
-            "участвуют все."
+            "участвуют все. Красный крестик справа от своих импортированных "
+            "моделей удаляет их (папку с диска) — у встроенных аватаров "
+            "крестика нет."
         )
         random_hint.setWordWrap(True)
         random_hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -340,6 +353,58 @@ class ModelTab(QWidget):
         self.config.save()
         self.on_random_pool_changed(checked)
 
+    def _on_delete_model_requested(self, name: str, data: str) -> None:
+        if name in BUILTIN_MODEL_NAMES:
+            return  # the ✕ isn't drawn for these, but guard in case something else fires this
+        confirm = QMessageBox.question(
+            self,
+            "Удалить модель",
+            f"Удалить модель «{name}» безвозвратно?\nПапка {data} будет удалена с диска.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        target_dir = app_root() / data
+        try:
+            shutil.rmtree(target_dir)
+        except OSError as exc:
+            logger.error("Не удалось удалить папку модели %s: %s", target_dir, exc)
+            self.status_label.setStyleSheet("color:#ff5c5c;")
+            self.status_label.setText(f"Не удалось удалить: {exc}")
+            return
+
+        logger.info("Модель '%s' удалена (%s)", name, target_dir)
+
+        # Qt auto-adjusts currentIndex when the current row is removed, which
+        # would fire currentIndexChanged (-> _on_model_selected) with
+        # whatever row happens to land there — block that so the fallback
+        # below is the only thing driving config.overlay.model_path when the
+        # deleted model was the active one.
+        was_active = self.config.overlay.model_path == data
+        self.model_combo.blockSignals(True)
+        self.model_combo.remove_item(name)
+        if was_active:
+            fallback = OverlayConfig().model_path
+            fallback_index = self.model_combo.findData(fallback)
+            self.model_combo.setCurrentIndex(max(0, fallback_index))
+        self.model_combo.blockSignals(False)
+
+        if was_active:
+            fallback = OverlayConfig().model_path
+            self.config.overlay.model_path = fallback
+            self.current_label.setText(f"Текущая модель: {fallback}")
+            self.on_model_selected(fallback)
+
+        # Re-syncs random_pool too: checked_names() no longer includes the
+        # removed row, whether or not it happened to be checked.
+        self._on_pool_check_toggled()
+        self.config.save()
+
+        self.status_label.setStyleSheet("color:#2ecc71;")
+        self.status_label.setText(f"Модель «{name}» удалена.")
+
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Папка с PNG-слоями модели")
         if not folder:
@@ -364,7 +429,7 @@ class ModelTab(QWidget):
         if existing >= 0:
             self.model_combo.setCurrentIndex(existing)
         else:
-            self.model_combo.add_item(result.model_name, self.config.overlay.model_path, True)
+            self.model_combo.add_item(result.model_name, self.config.overlay.model_path, True, deletable=True)
             self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
 
         summary = [

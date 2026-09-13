@@ -5,7 +5,7 @@ from typing import Callable
 
 from PySide6.QtCore import Property, QEvent, QObject, QPropertyAnimation, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QAbstractButton, QComboBox, QPushButton, QWidget
+from PySide6.QtWidgets import QAbstractButton, QComboBox, QPushButton, QStyledItemDelegate, QWidget
 
 _OFF_COLOR = QColor("#b7b7c0")
 _ON_COLOR = QColor("#6c5ce7")
@@ -60,6 +60,26 @@ class ToggleSwitch(QAbstractButton):
         painter.drawEllipse(QRectF(knob_x, 2, knob_diameter, knob_diameter))
 
 
+_DELETABLE_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class _DeletableItemDelegate(QStyledItemDelegate):
+    """Draws a small "✕" at the right edge of rows marked deletable — the
+    default delegate already draws the checkbox (Qt does that on its own for
+    any ItemIsUserCheckable item), but there's no built-in way to add a second
+    interactive glyph, so this paints the only extra bit ourselves."""
+
+    def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
+        super().paint(painter, option, index)
+        if not index.data(_DELETABLE_ROLE):
+            return
+        painter.save()
+        painter.setPen(QColor("#e74c3c"))
+        rect = option.rect.adjusted(0, 0, -8, 0)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "✕")
+        painter.restore()
+
+
 class CheckableModelCombo(QComboBox):
     """A QComboBox whose dropdown items each carry their own checkbox
     alongside the combo's normal single "current item" selection — two
@@ -70,24 +90,40 @@ class CheckableModelCombo(QComboBox):
     that item's checked state and keeps the dropdown open, without changing
     which item is "current". Clicking anywhere else on the row selects it as
     current and closes the dropdown — an ordinary QComboBox click, unaffected
-    by the checkbox."""
+    by the checkbox.
+
+    Rows added with deletable=True also get a "✕" at the right edge (see
+    _DeletableItemDelegate); clicking it emits delete_requested instead of
+    deleting anything itself — the caller owns confirming and actually
+    removing the model folder from disk (see ModelTab)."""
 
     checked_changed = Signal()
+    delete_requested = Signal(str, str)  # name, data (e.g. "assets/models/Foo")
     _CHECKBOX_ZONE_PX = 26  # left-edge width treated as "the checkbox", by feel rather than exact style metrics
+    _DELETE_ZONE_PX = 26  # mirror zone at the right edge for the "✕"
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._store = QStandardItemModel(self)
         self.setModel(self._store)
+        self._delegate = _DeletableItemDelegate(self)
+        self.view().setItemDelegate(self._delegate)
         self._skip_next_hide = False
         self.view().viewport().installEventFilter(self)
 
-    def add_item(self, name: str, data, checked: bool) -> None:
+    def add_item(self, name: str, data, checked: bool, deletable: bool = False) -> None:
         item = QStandardItem(name)
         item.setData(data, Qt.ItemDataRole.UserRole)
+        item.setData(deletable, _DELETABLE_ROLE)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         self._store.appendRow(item)
+
+    def remove_item(self, name: str) -> None:
+        for i in range(self._store.rowCount()):
+            if self._store.item(i).text() == name:
+                self._store.removeRow(i)
+                return
 
     def checked_names(self) -> list[str]:
         return [
@@ -112,8 +148,8 @@ class CheckableModelCombo(QComboBox):
             index = self.view().indexAt(event.pos())
             if index.isValid():
                 rect = self.view().visualRect(index)
+                item = self._store.itemFromIndex(index)
                 if event.pos().x() - rect.left() <= self._CHECKBOX_ZONE_PX:
-                    item = self._store.itemFromIndex(index)
                     item.setCheckState(
                         Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
                         else Qt.CheckState.Checked
@@ -121,6 +157,9 @@ class CheckableModelCombo(QComboBox):
                     self.checked_changed.emit()
                     self._skip_next_hide = True
                     return True  # swallow: no selection change, dropdown stays open
+                if item.data(_DELETABLE_ROLE) and rect.right() - event.pos().x() <= self._DELETE_ZONE_PX:
+                    self.delete_requested.emit(item.text(), item.data(Qt.ItemDataRole.UserRole))
+                    return True  # swallow: deleting is not selecting
         return super().eventFilter(obj, event)
 
     def hidePopup(self) -> None:  # noqa: N802

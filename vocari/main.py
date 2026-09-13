@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from vocari.__version__ import __version__
 from vocari.chat.base import ChatMessage
 from vocari.chat.filters import CooldownTracker, extract_command_text, find_blacklisted_word, has_access
-from vocari.config.settings import AppConfig
+from vocari.config.settings import AppConfig, OverlayConfig
 from vocari.hotkey import GlobalHotkeyManager
 from vocari.logging_setup import get_logger, setup_logging
 from vocari.paths import app_root
@@ -101,7 +101,22 @@ def main() -> None:
     config = AppConfig.load()
     model_dir = PROJECT_ROOT / config.overlay.model_path
     logger.info("Загрузка модели из %s", model_dir)
-    model = load_model(model_dir)
+    try:
+        model = load_model(model_dir)
+    except Exception:
+        # The saved model_path can point at a folder that's since been
+        # deleted (moved away by hand, or removed via Settings → Модель) —
+        # without this, a stale config.json made the app unable to start at
+        # all. Fall back to the bundled default and fix the config so this
+        # doesn't recur on the next launch too.
+        default_path = OverlayConfig().model_path
+        logger.exception(
+            "Не удалось загрузить модель из %s, откатываюсь на %s", model_dir, default_path
+        )
+        config.overlay.model_path = default_path
+        config.save()
+        model_dir = PROJECT_ROOT / default_path
+        model = load_model(model_dir)
     logger.info(
         "Модель '%s' загружена: %d базовых слоёв, состояния: %s",
         model.name,
