@@ -1,6 +1,9 @@
 """Application configuration: persisted JSON settings for the overlay, TTS and Twitch modules.
 
 Stage 1 only needs OverlayConfig; other sections are added in later stages.
+
+config.json is encrypted at rest (Windows DPAPI — see load()/save() and
+vocari/config/dpapi.py), not plain JSON on disk.
 """
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 import json
 
+from vocari.config import dpapi
 from vocari.paths import app_root
 
 PROJECT_ROOT = app_root()
@@ -183,12 +187,26 @@ class AppConfig:
         if not path.exists():
             return cls()
         try:
+            raw = path.read_bytes()
+        except OSError:
+            return cls()
+
+        try:
+            plaintext = dpapi.unprotect(raw)
+        except OSError:
+            # Not DPAPI ciphertext — most likely a config.json saved before
+            # encryption-at-rest was added (see save()). Read it as plain
+            # JSON so upgrading doesn't silently wipe the user's settings;
+            # the next save() re-writes it encrypted.
+            plaintext = raw
+
+        try:
             # utf-8-sig tolerates (and strips) a UTF-8 BOM — Notepad, and some
             # PowerShell versions, save UTF-8 files with one by default, which
             # would otherwise make json.loads() fail and silently reset to
             # defaults on the very first read.
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (json.JSONDecodeError, OSError):
+            data = json.loads(plaintext.decode("utf-8-sig"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return cls()
         overlay = _merge_section(OverlayConfig, data.get("overlay", {}))
         render = _merge_section(RenderConfig, data.get("render", {}))
@@ -209,4 +227,14 @@ class AppConfig:
             "hotkey": asdict(self.hotkey),
             "bubble": asdict(self.bubble),
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        plaintext = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        try:
+            # Encrypted at rest (Windows DPAPI, tied to this Windows user) so
+            # config.json isn't plain, hand-editable JSON on disk — the
+            # Twitch OAuth token especially has no business being readable/
+            # editable in a text editor. See vocari/config/dpapi.py.
+            path.write_bytes(dpapi.protect(plaintext))
+        except OSError:
+            # DPAPI unavailable for some reason — fail safe by still saving
+            # something usable rather than losing the user's settings.
+            path.write_bytes(plaintext)

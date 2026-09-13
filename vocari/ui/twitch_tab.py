@@ -101,7 +101,9 @@ class TwitchTab(QWidget):
 
         privacy_hint = QLabel(
             "Токен хранится только локально, в config.json на этом компьютере — "
-            "этот файл не попадает в git (он в .gitignore). Не публикуйте его нигде."
+            "этот файл не попадает в git (он в .gitignore) и зашифрован средствами "
+            "Windows, так что вручную его не открыть и не отредактировать. "
+            "Не публикуйте токен нигде."
         )
         privacy_hint.setWordWrap(True)
         privacy_hint.setStyleSheet("color: gray; font-size: 11px;")
