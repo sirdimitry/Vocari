@@ -38,6 +38,14 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
+; No folder-picker page at all - always the same fixed per-user location,
+; matching how Discord/Chrome/etc. install. Without this, Setup still
+; remembered the last-used path via AppId (Inno's default UsePreviousAppDir
+; behavior), but still made every run click through a page to confirm it -
+; a real update should be double-click and done. A one-off custom location
+; (e.g. for testing) is still possible via the command line: VocariSetup.exe
+; /DIR="X:\some\path" works even with the page disabled.
+DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible

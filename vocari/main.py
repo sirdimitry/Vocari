@@ -107,6 +107,18 @@ def main() -> None:
 
     log_file = setup_logging(PROJECT_ROOT)
 
+    def _log_unhandled_exception(exc_type, exc_value, exc_tb) -> None:
+        # This is a windowed app (no console) - without this hook, an
+        # exception raised inside a Qt-invoked callback (a queued signal
+        # handler, paintEvent, a timer tick, ...) can terminate the whole
+        # process with nothing in vocari.log at all, since PySide6's own
+        # default handling for that case is silent. Logging it here first
+        # means the *next* time something like this happens, the log
+        # actually says why instead of just recording the next startup.
+        logger.critical("Необработанное исключение — приложение может закрыться", exc_info=(exc_type, exc_value, exc_tb))
+
+    sys.excepthook = _log_unhandled_exception
+
     app = QApplication(sys.argv)
     # Fallback icon for anything Windows shows before/without a specific
     # window's own setWindowIcon() (e.g. taskbar grouping, Alt+Tab before a

@@ -44,7 +44,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from vocari.logging_setup import get_logger
 from vocari.paths import app_root
+
+logger = get_logger("runtime_deps")
 
 RUNTIME_DEPS_DIR = app_root() / "runtime_deps"
 
@@ -135,24 +138,31 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
         shutil.rmtree(target)
     RUNTIME_DEPS_DIR.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Скачивание %s: %s -> %s", dep.label, dep.url, target)
     tmp_zip = RUNTIME_DEPS_DIR / f"{dep.dir_name}.download.zip"
     try:
-        with urllib.request.urlopen(dep.url) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            with open(tmp_zip, "wb") as f:
-                while True:
-                    chunk = response.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    on_progress(downloaded, total)
+        try:
+            with urllib.request.urlopen(dep.url) as response:
+                total = int(response.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(tmp_zip, "wb") as f:
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        on_progress(downloaded, total)
+            logger.info("Скачано %s: %d байт (ожидалось %d)", dep.label, downloaded, total)
 
-        target.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(tmp_zip) as zf:
-            zf.extractall(target)
-        _marker(dep).write_text(str(dep.version), encoding="utf-8")
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(tmp_zip) as zf:
+                zf.extractall(target)
+            _marker(dep).write_text(str(dep.version), encoding="utf-8")
+            logger.info("Распаковано и готово: %s", dep.label)
+        except Exception:
+            logger.exception("Не удалось скачать/распаковать %s (%s)", dep.label, dep.url)
+            raise
     finally:
         tmp_zip.unlink(missing_ok=True)
 
@@ -169,18 +179,24 @@ def download_raw_file(url: str, dest: Path, on_progress: Callable[[int, int], No
     complete file to a later is_voice_available()-style check."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest.with_suffix(dest.suffix + ".part")
+    logger.info("Скачивание файла: %s -> %s", url, dest)
     try:
-        with urllib.request.urlopen(url) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                while True:
-                    chunk = response.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    on_progress(downloaded, total)
+        try:
+            with urllib.request.urlopen(url) as response:
+                total = int(response.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        on_progress(downloaded, total)
+            logger.info("Скачан файл %s: %d байт (ожидалось %d)", dest.name, downloaded, total)
+        except Exception:
+            logger.exception("Не удалось скачать файл %s (%s)", dest.name, url)
+            raise
         tmp_path.replace(dest)
     finally:
         tmp_path.unlink(missing_ok=True)

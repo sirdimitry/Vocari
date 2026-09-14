@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Callable
@@ -79,6 +80,12 @@ class PiperTTSProvider(TTSProvider):
                 input=text.encode("utf-8"),
                 capture_output=True,
                 timeout=30,
+                # piper.exe is a console-subsystem binary - launched plainly
+                # from a windowed (no-console) app, Windows briefly flashes a
+                # terminal window for it on every single synthesize() call.
+                # CREATE_NO_WINDOW suppresses that window entirely while
+                # capture_output still pipes stdin/stdout/stderr normally.
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
             if result.returncode != 0:
                 stderr = result.stderr.decode("utf-8", "replace")[-500:]

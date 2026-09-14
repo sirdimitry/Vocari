@@ -7,7 +7,7 @@ loaded once into this process's own memory."""
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, QThread, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from vocari.logging_setup import get_logger
 from vocari.runtime_deps import PIPER_ENGINE, download as download_engine, is_downloaded as is_engine_downloaded
@@ -53,45 +53,53 @@ class PiperTab(QWidget):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        engine_row = QHBoxLayout()
-        engine_row.addWidget(QLabel(f"Движок Piper (~{PIPER_ENGINE.approx_size_mb} МБ)"))
-        engine_row.addStretch()
+        # A single grid (not per-row QHBoxLayout) so Qt sizes each column to
+        # its widest cell across every row - labels/voice names vary a lot in
+        # length ("Ирина" vs "Lessac"), and separate per-row layouts left the
+        # status/button columns misaligned between rows.
+        grid = QGridLayout()
+        grid.setColumnStretch(1, 1)  # the gap between label and status/button grows, not the label itself
+        layout.addLayout(grid)
+        row_index = 0
+
+        grid.addWidget(QLabel(f"Движок Piper (~{PIPER_ENGINE.approx_size_mb} МБ)"), row_index, 0)
         self.engine_status = QLabel("")
-        engine_row.addWidget(self.engine_status)
+        grid.addWidget(self.engine_status, row_index, 2)
         self.engine_button = QPushButton()
         self.engine_button.clicked.connect(self._start_engine_download)
-        engine_row.addWidget(self.engine_button)
-        layout.addLayout(engine_row)
+        grid.addWidget(self.engine_button, row_index, 3)
+        row_index += 1
 
         self.engine_progress = QProgressBar()
         self.engine_progress.setRange(0, 100)
         self.engine_progress.hide()
-        layout.addWidget(self.engine_progress)
+        grid.addWidget(self.engine_progress, row_index, 0, 1, 4)
+        row_index += 1
 
-        layout.addWidget(QLabel("Голоса:"))
+        grid.addWidget(QLabel("Голоса:"), row_index, 0)
+        row_index += 1
 
         self.voice_status: dict[str, QLabel] = {}
         self.voice_buttons: dict[str, QPushButton] = {}
         self.voice_progress: dict[str, QProgressBar] = {}
 
         for voice in PIPER_VOICES:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(f"{voice.label} (~{voice.approx_size_mb} МБ)"))
-            row.addStretch()
+            grid.addWidget(QLabel(f"{voice.label} (~{voice.approx_size_mb} МБ)"), row_index, 0)
             status = QLabel("")
             self.voice_status[voice.voice_id] = status
-            row.addWidget(status)
+            grid.addWidget(status, row_index, 2)
             button = QPushButton()
             button.clicked.connect(lambda _checked, v=voice: self._start_voice_download(v))
             self.voice_buttons[voice.voice_id] = button
-            row.addWidget(button)
-            layout.addLayout(row)
+            grid.addWidget(button, row_index, 3)
+            row_index += 1
 
             progress = QProgressBar()
             progress.setRange(0, 100)
             progress.hide()
             self.voice_progress[voice.voice_id] = progress
-            layout.addWidget(progress)
+            grid.addWidget(progress, row_index, 0, 1, 4)
+            row_index += 1
 
         layout.addStretch()
         self._refresh_engine_state()
