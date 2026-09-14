@@ -10,6 +10,7 @@ isn't worth trying to redo mid-run for what's a rare, one-off event)."""
 from __future__ import annotations
 
 import sys
+from typing import Callable
 
 from PySide6.QtCore import QObject, QProcess, QThread, Signal
 from PySide6.QtWidgets import (
@@ -72,9 +73,10 @@ class _TorchDownloadWorker(QObject):
 
 
 class SileroTab(QWidget):
-    def __init__(self, provider: SileroTTSProvider):
+    def __init__(self, provider: SileroTTSProvider, on_voices_loaded: Callable[[str, list[str]], None] | None = None):
         super().__init__()
         self.provider = provider
+        self.on_voices_loaded = on_voices_loaded
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, _PreloadWorker] = {}
 
@@ -160,6 +162,13 @@ class SileroTab(QWidget):
         self.status_labels[lang].setText(f"готова ({speaker_count} голосов)")
         self.preload_buttons[lang].setEnabled(False)
         self.preload_buttons[lang].setText("Загружена")
+        if self.on_voices_loaded:
+            # self.provider already has this language's model loaded at
+            # this point (that's what just finished) - speakers() returns
+            # its real list straight from the model, e.g. all 119 v3_en
+            # names instead of the small static sample the TTS tab starts
+            # with (see vocari/tts/voices.py).
+            self.on_voices_loaded(lang, self.provider.speakers(lang))
 
     # -- first-run mode: torch needs downloading -----------------------------
 

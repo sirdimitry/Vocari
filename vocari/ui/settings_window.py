@@ -92,10 +92,11 @@ class SettingsWindow(QWidget):
         )
         self.bindings_tab = BindingsTab(config, on_bindings_changed, on_weights_changed)
         tabs.addTab(self._wrap(self.bindings_tab), "Ники")
-        tabs.addTab(self._wrap(TTSTab(config)), "TTS")
+        self.tts_tab = TTSTab(config)
+        tabs.addTab(self._wrap(self.tts_tab), "TTS")
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
-        tabs.addTab(self._wrap(SileroTab(silero_provider)), "Silero")
+        tabs.addTab(self._wrap(SileroTab(silero_provider, self.tts_tab.set_silero_voices)), "Silero")
         tabs.addTab(self._wrap(TwitchTab(config, twitch_bot_controller)), "Twitch")
 
         layout = QVBoxLayout(self)

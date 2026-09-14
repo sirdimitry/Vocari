@@ -14,17 +14,28 @@ logger = get_logger("settings_window")
 
 PROVIDERS = [("edge", "Edge TTS (облако, бесплатно)"), ("silero", "Silero (локально, офлайн)")]
 
+_HINT_POOL_LIMIT = 8  # names shown inline before falling back to "N голосов"
 
-def _voice_pool(provider: str, lang: str) -> list[str]:
-    if provider == "silero":
-        return SILERO_RU_VOICES if lang == "ru" else SILERO_EN_VOICES
-    return EDGE_RU_VOICES if lang == "ru" else EDGE_EN_VOICES
+
+def _format_pool(pool: list[str]) -> str:
+    if len(pool) <= _HINT_POOL_LIMIT:
+        return ", ".join(pool)
+    return f"{', '.join(pool[:_HINT_POOL_LIMIT])} и ещё {len(pool) - _HINT_POOL_LIMIT}"
 
 
 class TTSTab(QWidget):
     def __init__(self, config: AppConfig):
         super().__init__()
         self.config = config
+        # Filled in with the real speaker list once Silero actually loads a
+        # model (see set_silero_voices(), called from Settings -> Silero
+        # after a successful preload) - until then this stays the small
+        # static sample from vocari/tts/voices.py, since the model hasn't
+        # loaded yet and there's nothing truer to show.
+        self._silero_voices: dict[str, list[str]] = {
+            "ru": list(SILERO_RU_VOICES),
+            "en": list(SILERO_EN_VOICES),
+        }
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -122,12 +133,27 @@ class TTSTab(QWidget):
     def _current_provider(self) -> str:
         return self.provider_combo.currentData()
 
+    def _voice_pool(self, provider: str, lang: str) -> list[str]:
+        if provider == "silero":
+            return self._silero_voices[lang]
+        return EDGE_RU_VOICES if lang == "ru" else EDGE_EN_VOICES
+
+    def set_silero_voices(self, lang: str, voices: list[str]) -> None:
+        """Called from Settings -> Silero once a model actually finishes
+        loading, with its real speaker list (e.g. all 119 v3_en speakers,
+        not the 5-item static sample from vocari/tts/voices.py this tab
+        starts with) - refreshes the dropdown live if Silero/this language
+        happens to be showing right now."""
+        self._silero_voices[lang] = voices
+        if self._current_provider() == "silero":
+            self._refresh_for_provider()
+
     def _refresh_for_provider(self) -> None:
         provider = self._current_provider()
         is_silero = provider == "silero"
 
-        ru_pool = _voice_pool(provider, "ru")
-        en_pool = _voice_pool(provider, "en")
+        ru_pool = self._voice_pool(provider, "ru")
+        en_pool = self._voice_pool(provider, "en")
 
         self.voice_ru_combo.blockSignals(True)
         self.voice_en_combo.blockSignals(True)
@@ -148,9 +174,12 @@ class TTSTab(QWidget):
         self.rate_hint.setVisible(is_silero)
 
         if is_silero:
+            loaded = len(ru_pool) > len(SILERO_RU_VOICES) or len(en_pool) > len(SILERO_EN_VOICES)
             self.voices_hint.setText(
-                "Список — стандартные голоса Silero; полный список появится на "
-                "вкладке «Silero» после предзагрузки модели."
+                f"Полный список голосов Silero ({len(ru_pool)} RU, {len(en_pool)} EN)."
+                if loaded
+                else "Список — небольшой стандартный набор; полный (119 EN, 6 RU) появится "
+                "здесь сам после предзагрузки модели на вкладке «Silero»."
             )
         else:
             self.voices_hint.setText(
@@ -162,11 +191,11 @@ class TTSTab(QWidget):
 
     def _update_random_hint(self) -> None:
         provider = self._current_provider()
-        ru_pool = _voice_pool(provider, "ru")
-        en_pool = _voice_pool(provider, "en")
+        ru_pool = self._voice_pool(provider, "ru")
+        en_pool = self._voice_pool(provider, "en")
         self.random_hint.setText(
             "Вместо голосов из полей выше каждый раз выбирается случайный из "
-            f"набора выбранной озвучки: RU — {', '.join(ru_pool)}; EN — {', '.join(en_pool)}."
+            f"набора выбранной озвучки: RU — {_format_pool(ru_pool)}; EN — {_format_pool(en_pool)}."
         )
 
     def _on_provider_changed(self, _index: int) -> None:

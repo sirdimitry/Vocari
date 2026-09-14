@@ -21,11 +21,21 @@ from vocari.rendering.overlay_window import OverlayWindow
 from vocari.rendering.stage import AvatarInstance
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
+from vocari.tts.language import detect_language, split_by_script
 from vocari.tts.registry import get_active_provider
-from vocari.tts.service import pick_voice
-from vocari.tts.synthesis_worker import SynthesisWorker
+from vocari.tts.service import pick_voice, resolve_lang
+from vocari.tts.silero_provider import SileroTTSProvider
+from vocari.tts.synthesis_worker import SynthesisPart, SynthesisWorker
 
 logger = get_logger("tts.queue")
+
+# Between the nick announcement and the message itself — long enough to read
+# as a deliberate pause, not a stutter.
+ANNOUNCE_GAP_SECONDS = 0.25
+# Between two runs *within* the same phrase/message that just switched
+# script (a foreign word or two mid-sentence) — short, more like a breath
+# than a pause, since these can happen several times in one sentence.
+SCRIPT_SWITCH_GAP_SECONDS = 0.08
 
 
 class TTSQueue(QObject):
@@ -148,33 +158,78 @@ class TTSQueue(QObject):
             logger.exception("TTS-очередь: не удалось запустить синтез (id=%d)", instance_id)
             self.window.retire_speaker(instance_id)
 
-    def _synthesis_parts(self, inst: AvatarInstance) -> list[tuple[str, str, str]]:
-        """Text segment(s) to synthesize, each already paired with its own
-        voice/lang. The bubble's own text (inst.text) stays just the
-        message, since the sender's name is already shown there separately
-        — the announcement is audio-only, prepended here instead.
+    def _voice_runs(self, text: str) -> list[tuple[str, str, str]]:
+        """`text` split into (chunk, voice, lang) runs — one run per
+        contiguous stretch that stays in one script (Cyrillic/Latin), each
+        independently voiced. A single voice can only pronounce the
+        language it was built for: a foreign nickname or a few words in the
+        "other" language embedded in an otherwise single-language string
+        would otherwise get silently dropped or badly mangled by whichever
+        one voice the *whole* string happened to be sent to — see
+        tts/language.py's split_by_script(). Same voice is reused for every
+        run that lands on the same language, so e.g. "Случайный голос"
+        doesn't flicker between different random picks mid-sentence just
+        because the language briefly switched and switched back.
 
-        The announce phrase gets picked a voice *separately* from the
-        message, not folded into one combined string synthesized with a
-        single voice: a voice can typically only pronounce the language it
-        was built for, so e.g. a Russian phrase glued onto an English
-        message and read by one English voice would silently drop or mangle
-        the Russian half. Two parts means two provider.synthesize() calls
-        (see SynthesisWorker), each correctly detected/voiced on its own —
-        same reasoning as the existing "detect from the message alone, not
-        the combined text" note below, just applied to both sides now."""
+        In manual-language mode (auto_detect_language off) there's nothing
+        to detect per run — the user pinned one language for everything —
+        so this stays a single run, same as before splitting existed."""
+        tts_config = self.config.tts
+        if not tts_config.auto_detect_language:
+            lang = resolve_lang(text, tts_config)
+            voice, _ = pick_voice(text, tts_config, manual_lang=lang, pool=self._voice_pool(lang))
+            return [(text, voice, lang)]
+
+        voice_by_lang: dict[str, str] = {}
+        runs = []
+        for chunk, lang in split_by_script(text, detect_language(text)):
+            if lang not in voice_by_lang:
+                voice_by_lang[lang] = pick_voice(chunk, tts_config, manual_lang=lang, pool=self._voice_pool(lang))[0]
+            runs.append((chunk, voice_by_lang[lang], lang))
+        return runs
+
+    def _voice_pool(self, lang: str) -> list[str] | None:
+        """The real pool "Случайный голос" should draw from for `lang`, if
+        one is actually known right now — for Silero, that means the model
+        for `lang` has actually been loaded (preloaded from Settings ->
+        Silero, or lazily by a previous synthesize() call) and can report
+        its true speaker list (e.g. all 119 v3_en names), rather than
+        falling back to pick_voice()'s small built-in static sample.
+        Returns None (defer to that static fallback) for edge-tts, or for
+        Silero before anything's loaded yet."""
+        if self.config.tts.provider != "silero":
+            return None
+        provider = self.providers.get("silero")
+        if isinstance(provider, SileroTTSProvider) and provider.is_loaded(lang):
+            return provider.speakers(lang) or None
+        return None
+
+    def _synthesis_parts(self, inst: AvatarInstance) -> list[SynthesisPart]:
+        """Every text segment to synthesize for this instance, in order,
+        each already paired with its own voice/lang and the silence to
+        leave after it. The bubble's own displayed text (inst.text) stays
+        just the message — the sender's name is already shown there
+        separately, so the announcement is audio-only, prepended here."""
         config = self.config.bubble
+        parts: list[SynthesisPart] = []
+
         if config.announce_nick and inst.author:
             phrase = config.announce_phrase.replace("Ник", inst.author).strip()
             if phrase:
-                phrase_voice, phrase_lang = pick_voice(phrase, self.config.tts)
-                message_voice, message_lang = pick_voice(inst.text, self.config.tts)
-                return [(phrase, phrase_voice, phrase_lang), (inst.text, message_voice, message_lang)]
-        # Voice/language are picked from the message alone — a short fixed
-        # phrase (if any got folded in above) shouldn't be allowed to sway
-        # auto-detection against what's actually the bulk of the utterance.
-        voice, lang = pick_voice(inst.text, self.config.tts)
-        return [(inst.text, voice, lang)]
+                parts.extend(
+                    SynthesisPart(chunk, voice, lang, SCRIPT_SWITCH_GAP_SECONDS)
+                    for chunk, voice, lang in self._voice_runs(phrase)
+                )
+                if parts:
+                    parts[-1].gap_after = ANNOUNCE_GAP_SECONDS
+
+        parts.extend(
+            SynthesisPart(chunk, voice, lang, SCRIPT_SWITCH_GAP_SECONDS)
+            for chunk, voice, lang in self._voice_runs(inst.text)
+        )
+        if parts:
+            parts[-1].gap_after = 0.0  # no trailing silence after the very last part
+        return parts
 
     def _start_synthesis(self, instance_id: int) -> None:
         inst = self.window.stage.get(instance_id)
@@ -185,7 +240,7 @@ class TTSQueue(QObject):
         provider = get_active_provider(self.config.tts, self.providers)
         logger.info(
             "TTS-очередь: синтез %s provider=%s",
-            " + ".join(f"'{text}' voice={voice}" for text, voice, _lang in parts),
+            " + ".join(f"'{p.text}' voice={p.voice}" for p in parts),
             self.config.tts.provider,
         )
 
