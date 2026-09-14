@@ -46,7 +46,7 @@ OutputDir=output
 OutputBaseFilename=VocariSetup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\assets\branding\icon.ico
 WizardStyle=modern
 SetupIconFile=..\assets\branding\icon.ico
 WizardImageFile=branding\wizard_image.png
@@ -64,8 +64,14 @@ Source: "..\dist\Vocari\*"; DestDir: "{app}"; Flags: recursesubdirs createallsub
 Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+; IconFilename points at our own .ico explicitly rather than relying on
+; Windows extracting one from the .exe's embedded resource — the exe's icon
+; is set correctly (vocari.spec's EXE(icon=...)), but Explorer/the taskbar
+; cache icons per file path and can keep showing a stale one (e.g. the old
+; icon-less default) after an in-place upgrade until that cache clears; a
+; shortcut with its own explicit IconFilename doesn't depend on that.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\branding\icon.ico"
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\branding\icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Устанавливаем Microsoft Visual C++ Redistributable…"; Check: VCRedistNeedsInstall; Flags: waituntilterminated

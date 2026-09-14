@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from vocari.__version__ import __version__
+from vocari.branding import app_icon
 from vocari.chat.base import ChatMessage
 from vocari.chat.filters import CooldownTracker, extract_command_text, find_blacklisted_word, has_access
 from vocari.config.settings import AppConfig, OverlayConfig
@@ -93,6 +94,11 @@ def main() -> None:
     log_file = setup_logging(PROJECT_ROOT)
 
     app = QApplication(sys.argv)
+    # Fallback icon for anything Windows shows before/without a specific
+    # window's own setWindowIcon() (e.g. taskbar grouping, Alt+Tab before a
+    # window's finished loading) — each top-level window also sets its own
+    # via vocari.branding.app_icon(), this just covers the gap between them.
+    app.setWindowIcon(app_icon())
     # The overlay window is frameless; hiding it must not quit the app — only
     # the tray icon's "Выход" should.
     app.setQuitOnLastWindowClosed(False)
