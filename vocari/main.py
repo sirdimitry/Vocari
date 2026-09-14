@@ -146,6 +146,8 @@ def main() -> None:
     window.set_available_models(available)
     window.set_random_model(config.overlay.random_model)
     window.set_random_pool(config.overlay.random_pool)
+    window.set_model_weights(config.overlay.model_weights)
+    window.set_user_model_bindings(config.overlay.user_model_bindings)
     logger.info("Доступные модели: %s", ", ".join(m.name for m in available) or "—")
     window.show()
 
@@ -167,6 +169,23 @@ def main() -> None:
         window.set_random_pool(names)
         logger.info("Участвуют в случайном выборе: %s", ", ".join(names) or "все")
 
+    def on_model_weights_changed(weights: dict[str, float]) -> None:
+        window.set_model_weights(weights)
+
+    def on_bindings_changed(bindings: dict[str, str]) -> None:
+        window.set_user_model_bindings(bindings)
+
+    def on_model_deleted(name: str) -> None:
+        # model_tab.py already pruned config.overlay.model_weights/
+        # user_model_bindings for this name before calling here - push that
+        # forward to the live overlay and to the "Ники" tab's own widgets so
+        # nothing keeps offering a model that's gone (see bindings_tab.py's
+        # refresh_models() docstring for why this matters).
+        window.set_model_weights(config.overlay.model_weights)
+        window.set_user_model_bindings(config.overlay.user_model_bindings)
+        settings_window.bindings_tab.refresh_models()
+        logger.info("Модель '%s' удалена: привязки и веса очищены", name)
+
     def on_model_imported(model_dir: Path) -> None:
         try:
             new_model = load_model(model_dir)
@@ -175,6 +194,7 @@ def main() -> None:
             return
         window.set_model(new_model)
         settings_window.model_tab.set_model(new_model)
+        settings_window.bindings_tab.refresh_models()
         logger.info("Оверлей обновлён: модель '%s'", new_model.name)
 
     tts_providers = {"edge": EdgeTTSProvider(), "silero": SileroTTSProvider()}
@@ -219,6 +239,10 @@ def main() -> None:
         logger.info(
             "Twitch !tts от %s: '%s'%s", message.display_name, text, " (обрезано)" if truncated else ""
         )
+        # Lets Settings -> Ники offer this nick for a model binding right
+        # away, mid-stream, instead of requiring it to be typed by hand -
+        # add_known_nick() itself no-ops for a nick already on the list.
+        settings_window.bindings_tab.add_known_nick(message.display_name)
         tts_queue.enqueue(text, message.display_name)
 
     twitch_bot.message_received.connect(on_chat_message)
@@ -237,6 +261,9 @@ def main() -> None:
         on_model_selected,
         on_random_model_toggled,
         on_random_pool_changed,
+        on_model_deleted,
+        on_bindings_changed,
+        on_model_weights_changed,
         on_skip_hotkey_changed,
         window.apply_bubble_settings,
         tts_providers,

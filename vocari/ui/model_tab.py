@@ -60,6 +60,7 @@ class ModelTab(QWidget):
         on_model_selected: Callable[[str], None],
         on_random_model_toggled: Callable[[bool], None],
         on_random_pool_changed: Callable[[list[str]], None],
+        on_model_deleted: Callable[[str], None],
     ):
         super().__init__()
         self.config = config
@@ -72,6 +73,7 @@ class ModelTab(QWidget):
         self.on_model_selected = on_model_selected
         self.on_random_model_toggled = on_random_model_toggled
         self.on_random_pool_changed = on_random_pool_changed
+        self.on_model_deleted = on_model_deleted
 
         # Two columns: the screen preview (the thing you actually aim with)
         # on the left, the numbers that describe it on the right, so dragging
@@ -409,7 +411,17 @@ class ModelTab(QWidget):
         # Re-syncs random_pool too: checked_names() no longer includes the
         # removed row, whether or not it happened to be checked.
         self._on_pool_check_toggled()
+
+        # A deleted model can't stay pinned to anyone's random-weight or
+        # nick binding either - see bindings_tab.py, which on_model_deleted
+        # below refreshes so its own dropdowns/rows stop offering a model
+        # that no longer exists.
+        self.config.overlay.model_weights.pop(name, None)
+        stale_nicks = [nick for nick, bound in self.config.overlay.user_model_bindings.items() if bound == name]
+        for nick in stale_nicks:
+            del self.config.overlay.user_model_bindings[nick]
         self.config.save()
+        self.on_model_deleted(name)
 
         self.status_label.setStyleSheet("color:#2ecc71;")
         self.status_label.setText(f"Модель «{name}» удалена.")

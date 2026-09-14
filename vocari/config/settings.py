@@ -50,6 +50,20 @@ class OverlayConfig:
     # state falls back to, since a pool nobody can be drawn from isn't a
     # useful configuration).
     random_pool: list[str] = field(default_factory=list)
+    # Relative weight per model name when random_model picks among the pool
+    # above — a model missing here defaults to 1.0 (see
+    # overlay_window.py's _pick_model_name), so importing a new model needs
+    # no bookkeeping here until the user actually wants to tune its odds.
+    model_weights: dict[str, float] = field(default_factory=dict)
+    # Chat nickname (lowercased) -> model name: that person's messages
+    # always use this avatar instead of random_model's pick, regardless of
+    # whether random_model is even on. Settings → Ники.
+    user_model_bindings: dict[str, str] = field(default_factory=dict)
+    # Nicknames the app has actually seen say a !tts command, in the order
+    # first seen — lets Settings → Ники offer a picker instead of requiring
+    # the streamer to type a nick by hand (and risk a typo that silently
+    # never matches).
+    known_nicks: list[str] = field(default_factory=list)
 
 
 @dataclass

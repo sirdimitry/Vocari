@@ -243,6 +243,8 @@ class OverlayWindow(QWidget):
         self._packs: dict[str, ModelPack] = {model.name: ModelPack.build(model)}
         self.random_model = False
         self._random_pool: list[str] = []
+        self._model_weights: dict[str, float] = {}
+        self._user_model_bindings: dict[str, str] = {}
         self._drag_offset: QPoint | None = None
         self.stage = Stage(
             canvas_width=model.canvas_size[0],
@@ -424,10 +426,29 @@ class OverlayWindow(QWidget):
         drawn from would just make random mode draw nothing."""
         self._random_pool = list(names)
 
-    def _pick_model_name(self) -> str:
+    def set_model_weights(self, weights: dict[str, float]) -> None:
+        """Relative odds per model name for random_model's pick (Settings →
+        Ники). A name missing here defaults to 1.0 in _pick_model_name, so
+        this dict only needs entries for models someone actually tuned."""
+        self._model_weights = dict(weights)
+
+    def set_user_model_bindings(self, bindings: dict[str, str]) -> None:
+        """Chat nickname (lowercased) -> model name (Settings → Ники): that
+        person's avatar is fixed regardless of random_model. Keyed by
+        lowercased nick so lookup in _pick_model_name doesn't care about
+        the case chat happened to send it in."""
+        self._user_model_bindings = dict(bindings)
+
+    def _pick_model_name(self, author: str = "") -> str:
+        bound = self._user_model_bindings.get(author.strip().lower()) if author else None
+        if bound and bound in self._packs:
+            return bound
         if self.random_model and len(self._packs) > 1:
             pool = [name for name in self._packs if name in self._random_pool] if self._random_pool else list(self._packs)
             if pool:
+                weights = [max(0.0, self._model_weights.get(name, 1.0)) for name in pool]
+                if sum(weights) > 0:
+                    return random.choices(pool, weights=weights, k=1)[0]
                 return random.choice(pool)
         return self.model.name
 
@@ -436,7 +457,7 @@ class OverlayWindow(QWidget):
         settings can be tweaked against the real overlay. Replaces whatever
         preview was already there rather than stacking them up."""
         self.hide_bubble_preview()
-        inst = self.stage.add(text, author, preview=True, model_name=self._pick_model_name())
+        inst = self.stage.add(text, author, preview=True, model_name=self._pick_model_name(author))
         if inst is not None:
             self._schedule_next_blink(inst.id)
         self.update()
@@ -462,7 +483,7 @@ class OverlayWindow(QWidget):
         a stage slot (speaking if free, else the next waiting slot) and
         starts sliding in from off-screen, or returns None if all 7 slots
         are taken (caller should keep `text` in its own backlog)."""
-        inst = self.stage.add(text, author, model_name=self._pick_model_name())
+        inst = self.stage.add(text, author, model_name=self._pick_model_name(author))
         if inst is not None:
             self._schedule_next_blink(inst.id)
         self.update()

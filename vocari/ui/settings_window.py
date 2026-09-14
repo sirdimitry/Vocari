@@ -1,4 +1,4 @@
-"""Settings window, opened from the tray icon: Рендер / Модель / Облачко / TTS / Silero / Twitch."""
+"""Settings window, opened from the tray icon: Рендер / Модель / Облачко / Ники / TTS / Silero / Twitch."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,6 +22,7 @@ from vocari.tts.base import TTSProvider
 from vocari.tts.silero_provider import SileroTTSProvider
 from vocari.tts.tts_queue import TTSQueue
 from vocari.twitch.bot_controller import TwitchBotController
+from vocari.ui.bindings_tab import BindingsTab
 from vocari.ui.bubble_tab import BubbleTab
 from vocari.ui.model_tab import ModelTab
 from vocari.ui.render_tab import RenderTab
@@ -49,6 +50,9 @@ class SettingsWindow(QWidget):
         on_model_selected: Callable[[str], None],
         on_random_model_toggled: Callable[[bool], None],
         on_random_pool_changed: Callable[[list[str]], None],
+        on_model_deleted: Callable[[str], None],
+        on_bindings_changed: Callable[[dict[str, str]], None],
+        on_weights_changed: Callable[[dict[str, float]], None],
         on_skip_hotkey_changed: Callable[[str], bool],
         on_bubble_changed: Callable[[], None],
         tts_providers: dict[str, TTSProvider],
@@ -75,6 +79,7 @@ class SettingsWindow(QWidget):
             config, model, on_model_imported, on_position_changed, on_scale_changed,
             on_entrance_side_toggled, on_exit_speed_changed,
             on_model_selected, on_random_model_toggled, on_random_pool_changed,
+            on_model_deleted,
         )
         # The model tab lays itself out in two columns, so it gets the full
         # window width; the single-column tabs stay within a readable measure.
@@ -83,6 +88,8 @@ class SettingsWindow(QWidget):
             self._wrap(BubbleTab(config, on_bubble_changed, tts_queue), constrain_width=False),
             "Облачко",
         )
+        self.bindings_tab = BindingsTab(config, on_bindings_changed, on_weights_changed)
+        tabs.addTab(self._wrap(self.bindings_tab), "Ники")
         tabs.addTab(self._wrap(TTSTab(config)), "TTS")
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
