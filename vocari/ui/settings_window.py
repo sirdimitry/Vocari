@@ -1,4 +1,4 @@
-"""Settings window, opened from the tray icon: Рендер / Модель / Облачко / Ники / TTS / Silero / Twitch."""
+"""Settings window, opened from the tray icon: Рендер / Модель / Облачко / Ники / TTS / Silero / Piper / Twitch."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,6 +26,7 @@ from vocari.twitch.bot_controller import TwitchBotController
 from vocari.ui.bindings_tab import BindingsTab
 from vocari.ui.bubble_tab import BubbleTab
 from vocari.ui.model_tab import ModelTab
+from vocari.ui.piper_tab import PiperTab
 from vocari.ui.render_tab import RenderTab
 from vocari.ui.silero_tab import SileroTab
 from vocari.ui.tts_tab import TTSTab
@@ -97,6 +98,7 @@ class SettingsWindow(QWidget):
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
         tabs.addTab(self._wrap(SileroTab(silero_provider, self.tts_tab.set_silero_voices)), "Silero")
+        tabs.addTab(self._wrap(PiperTab(self.tts_tab.set_piper_voices)), "Piper")
         tabs.addTab(self._wrap(TwitchTab(config, twitch_bot_controller)), "Twitch")
 
         layout = QVBoxLayout(self)

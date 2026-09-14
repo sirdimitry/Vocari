@@ -37,11 +37,23 @@ def pick_voice(
     if config.provider == "silero":
         pool = pool if pool is not None else (SILERO_RU_VOICES if lang == "ru" else SILERO_EN_VOICES)
         fixed_voice = config.silero_voice_ru if lang == "ru" else config.silero_voice_en
+    elif config.provider == "piper":
+        # No small built-in sample here (unlike edge/silero) - a Piper
+        # voice id is only meaningful once its .onnx has actually been
+        # downloaded (see tts_queue.py's _voice_pool, which supplies the
+        # real downloaded list); with nothing downloaded yet, `pool`
+        # legitimately has nothing to offer, so random mode just falls back
+        # to whatever fixed voice is configured.
+        pool = pool if pool is not None else []
+        fixed_voice = config.piper_voice_ru if lang == "ru" else config.piper_voice_en
     else:
         pool = pool if pool is not None else (EDGE_RU_VOICES if lang == "ru" else EDGE_EN_VOICES)
         fixed_voice = config.voice_ru if lang == "ru" else config.voice_en
 
-    voice = random.choice(pool) if config.random_voice else fixed_voice
+    # `pool` guard: Piper legitimately can have an empty pool (nothing
+    # downloaded for this language yet) - fall back to the fixed voice
+    # rather than crashing random.choice() on an empty sequence.
+    voice = random.choice(pool) if config.random_voice and pool else fixed_voice
     return voice, lang
 
 

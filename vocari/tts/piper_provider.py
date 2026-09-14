@@ -1,0 +1,106 @@
+"""Local, fully offline TTS provider using Piper (https://github.com/rhasspy/piper)
+— a fast ONNX-based neural engine, much lighter than Silero (no PyTorch, just
+onnxruntime bundled inside Piper's own release) and noticeably faster on CPU
+(real-time factor ~0.1 in testing: synthesizing 3s of speech takes ~0.3s).
+
+Runs the actual `piper.exe` binary as a subprocess (text on stdin, WAV out to
+a temp file) rather than a Python ONNX binding — keeps this provider free of
+any new pip dependency, since Piper's own release already ships a self-
+contained Windows binary plus its own onnxruntime/espeak-ng DLLs it needs.
+
+Like Silero, both the engine (piper.exe + DLLs, ~25 MB) and every voice model
+(~60 MB each) are downloaded on demand (see vocari/runtime_deps.py) rather
+than bundled with the app — the installer stays small, and only users who
+actually want a given Piper voice pay for its download.
+"""
+from __future__ import annotations
+
+import asyncio
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Callable
+
+from vocari.logging_setup import get_logger
+from vocari.paths import app_root
+from vocari.runtime_deps import download_raw_file
+from vocari.tts.base import SynthesisResult, TTSProvider
+from vocari.tts.piper_voices import PiperVoice
+
+logger = get_logger("tts.piper")
+
+# Piper's own release zip has everything under a top-level "piper/" folder
+# (see vocari/runtime_deps.py's PIPER_ENGINE) - ENGINE_DIR points one level
+# deeper than the download target itself to land inside it.
+ENGINE_DIR = app_root() / "runtime_deps" / "piper_engine" / "piper"
+VOICES_DIR = app_root() / "runtime_deps" / "piper_voices"
+
+PIPER_MISSING_HINT = 'откройте вкладку "Piper" в настройках и нажмите "Скачать движок Piper"'
+
+
+class PiperTTSProvider(TTSProvider):
+    def is_engine_available(self) -> bool:
+        return (ENGINE_DIR / "piper.exe").exists()
+
+    def is_voice_available(self, voice_id: str) -> bool:
+        return (VOICES_DIR / f"{voice_id}.onnx").exists()
+
+    def available_voices(self) -> list[str]:
+        if not VOICES_DIR.exists():
+            return []
+        return sorted(p.stem for p in VOICES_DIR.glob("*.onnx"))
+
+    async def synthesize(
+        self,
+        text: str,
+        voice: str,
+        lang: str,
+        rate: str = "+0%",
+        volume: str = "+0%",
+    ) -> SynthesisResult:
+        # rate/volume accepted only so every TTSProvider can be called the
+        # same way (see SynthesisWorker) - Piper has no simple equivalent
+        # knob exposed here; AudioPlayer's own gain still applies volume
+        # regardless of provider, same as Silero.
+        if not self.is_engine_available():
+            raise RuntimeError(f"Piper не установлен — {PIPER_MISSING_HINT}")
+        if not self.is_voice_available(voice):
+            raise RuntimeError(f"Голос Piper '{voice}' не скачан — {PIPER_MISSING_HINT.replace('движок Piper', 'нужный голос')}")
+        return await asyncio.to_thread(self._synthesize_sync, text, voice)
+
+    def _synthesize_sync(self, text: str, voice: str) -> SynthesisResult:
+        exe = ENGINE_DIR / "piper.exe"
+        model_path = VOICES_DIR / f"{voice}.onnx"
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            out_path = Path(tmp.name)
+        try:
+            result = subprocess.run(
+                [str(exe), "--model", str(model_path), "--output_file", str(out_path)],
+                input=text.encode("utf-8"),
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", "replace")[-500:]
+                raise RuntimeError(f"piper.exe завершился с ошибкой: {stderr}")
+            audio = out_path.read_bytes()
+        finally:
+            out_path.unlink(missing_ok=True)
+        return SynthesisResult(audio=audio, format="wav")
+
+
+def download_voice(voice: PiperVoice, on_progress: Callable[[int, int], None]) -> None:
+    """Blocking — call from a background thread, not the Qt main thread.
+    Downloads a voice's two files (the .onnx model + its .onnx.json config,
+    both required) straight from Hugging Face into VOICES_DIR — see
+    vocari/tts/piper_voices.py for where each voice's URLs come from.
+    `on_progress` sees combined progress across both files (the .json is
+    tiny compared to the .onnx, so this doesn't need to weight them)."""
+    onnx_path = VOICES_DIR / f"{voice.voice_id}.onnx"
+    config_path = VOICES_DIR / f"{voice.voice_id}.onnx.json"
+
+    # The .onnx is ~60 MB, its .json a few KB — treat the .onnx download as
+    # essentially the whole thing for progress purposes rather than trying
+    # to divide total_bytes across two separate HTTP responses.
+    download_raw_file(voice.onnx_url, onnx_path, on_progress)
+    download_raw_file(voice.config_url, config_path, lambda _d, _t: None)

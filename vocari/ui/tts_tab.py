@@ -12,7 +12,11 @@ from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
 
-PROVIDERS = [("edge", "Edge TTS (облако, бесплатно)"), ("silero", "Silero (локально, офлайн)")]
+PROVIDERS = [
+    ("edge", "Edge TTS (облако, бесплатно)"),
+    ("silero", "Silero (локально, офлайн)"),
+    ("piper", "Piper (локально, офлайн, быстрее Silero)"),
+]
 
 _HINT_POOL_LIMIT = 8  # names shown inline before falling back to "N голосов"
 
@@ -36,6 +40,11 @@ class TTSTab(QWidget):
             "ru": list(SILERO_RU_VOICES),
             "en": list(SILERO_EN_VOICES),
         }
+        # Same idea as _silero_voices, but Piper starts genuinely empty -
+        # nothing's downloaded until the user does so from Settings -> Piper
+        # (see set_piper_voices()), unlike Silero/edge which always have at
+        # least a small static sample to show.
+        self._piper_voices: dict[str, list[str]] = {"ru": [], "en": []}
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -136,6 +145,8 @@ class TTSTab(QWidget):
     def _voice_pool(self, provider: str, lang: str) -> list[str]:
         if provider == "silero":
             return self._silero_voices[lang]
+        if provider == "piper":
+            return self._piper_voices[lang]
         return EDGE_RU_VOICES if lang == "ru" else EDGE_EN_VOICES
 
     def set_silero_voices(self, lang: str, voices: list[str]) -> None:
@@ -148,9 +159,24 @@ class TTSTab(QWidget):
         if self._current_provider() == "silero":
             self._refresh_for_provider()
 
+    def set_piper_voices(self, lang: str, voices: list[str]) -> None:
+        """Called from Settings -> Piper after a voice download finishes,
+        with every downloaded voice for that language - refreshes the
+        dropdown live if Piper/this language happens to be showing."""
+        self._piper_voices[lang] = voices
+        if self._current_provider() == "piper":
+            self._refresh_for_provider()
+
+    def _current_voice(self, provider: str, lang: str) -> str:
+        if provider == "silero":
+            return self.config.tts.silero_voice_ru if lang == "ru" else self.config.tts.silero_voice_en
+        if provider == "piper":
+            return self.config.tts.piper_voice_ru if lang == "ru" else self.config.tts.piper_voice_en
+        return self.config.tts.voice_ru if lang == "ru" else self.config.tts.voice_en
+
     def _refresh_for_provider(self) -> None:
         provider = self._current_provider()
-        is_silero = provider == "silero"
+        is_offline = provider in ("silero", "piper")
 
         ru_pool = self._voice_pool(provider, "ru")
         en_pool = self._voice_pool(provider, "en")
@@ -161,25 +187,27 @@ class TTSTab(QWidget):
         self.voice_en_combo.clear()
         self.voice_ru_combo.addItems(ru_pool)
         self.voice_en_combo.addItems(en_pool)
-        self.voice_ru_combo.setCurrentText(
-            self.config.tts.silero_voice_ru if is_silero else self.config.tts.voice_ru
-        )
-        self.voice_en_combo.setCurrentText(
-            self.config.tts.silero_voice_en if is_silero else self.config.tts.voice_en
-        )
+        self.voice_ru_combo.setCurrentText(self._current_voice(provider, "ru"))
+        self.voice_en_combo.setCurrentText(self._current_voice(provider, "en"))
         self.voice_ru_combo.blockSignals(False)
         self.voice_en_combo.blockSignals(False)
 
-        self.rate_spin.setEnabled(not is_silero)
-        self.rate_hint.setVisible(is_silero)
+        self.rate_spin.setEnabled(not is_offline)
+        self.rate_hint.setVisible(is_offline)
 
-        if is_silero:
+        if provider == "silero":
             loaded = len(ru_pool) > len(SILERO_RU_VOICES) or len(en_pool) > len(SILERO_EN_VOICES)
             self.voices_hint.setText(
                 f"Полный список голосов Silero ({len(ru_pool)} RU, {len(en_pool)} EN)."
                 if loaded
                 else "Список — небольшой стандартный набор; полный (119 EN, 6 RU) появится "
                 "здесь сам после предзагрузки модели на вкладке «Silero»."
+            )
+        elif provider == "piper":
+            self.voices_hint.setText(
+                f"Скачано: {len(ru_pool)} RU, {len(en_pool)} EN."
+                if ru_pool or en_pool
+                else "Пока ни один голос не скачан — откройте вкладку «Piper», чтобы выбрать и скачать."
             )
         else:
             self.voices_hint.setText(
@@ -205,15 +233,21 @@ class TTSTab(QWidget):
         self._refresh_for_provider()
 
     def _on_voice_ru_changed(self, text: str) -> None:
-        if self._current_provider() == "silero":
+        provider = self._current_provider()
+        if provider == "silero":
             self.config.tts.silero_voice_ru = text
+        elif provider == "piper":
+            self.config.tts.piper_voice_ru = text
         else:
             self.config.tts.voice_ru = text
         self.config.save()
 
     def _on_voice_en_changed(self, text: str) -> None:
-        if self._current_provider() == "silero":
+        provider = self._current_provider()
+        if provider == "silero":
             self.config.tts.silero_voice_en = text
+        elif provider == "piper":
+            self.config.tts.piper_voice_en = text
         else:
             self.config.tts.voice_en = text
         self.config.save()

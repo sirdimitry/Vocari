@@ -73,6 +73,18 @@ TORCH_CPU = RuntimeDep(
     version=2,  # v2: bundles the full stdlib + omegaconf's deps too - v1 was missing timeit/xml.etree/omegaconf etc.
 )
 
+# Piper's own official release, used as-is (not re-hosted) - it's a public
+# GitHub repo, no auth needed, same as any other direct download. The zip's
+# own internal layout has everything under a top-level "piper/" folder,
+# hence PiperTTSProvider.ENGINE_DIR pointing at runtime_deps/piper_engine/piper.
+PIPER_ENGINE = RuntimeDep(
+    label="Piper (офлайн-голоса)",
+    dir_name="piper_engine",
+    url="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
+    approx_size_mb=25,
+    version=1,
+)
+
 
 def _dep_path(dep: RuntimeDep) -> Path:
     return RUNTIME_DEPS_DIR / dep.dir_name
@@ -145,3 +157,30 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
         tmp_zip.unlink(missing_ok=True)
 
     ensure_on_path(dep)
+
+
+def download_raw_file(url: str, dest: Path, on_progress: Callable[[int, int], None]) -> None:
+    """Blocking (network + disk I/O) — call from a background thread. Plain
+    single-file download, not a RuntimeDep zip — used for individual Piper
+    voice model files (a .onnx + its .onnx.json, downloaded one at a time
+    rather than as one big bundle, since there can be many voices and a user
+    only wants a few). Downloads to a temp name first and renames on
+    success, so a failed/interrupted download can never look like a
+    complete file to a later is_voice_available()-style check."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with urllib.request.urlopen(url) as response:
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = response.read(1024 * 256)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    on_progress(downloaded, total)
+        tmp_path.replace(dest)
+    finally:
+        tmp_path.unlink(missing_ok=True)

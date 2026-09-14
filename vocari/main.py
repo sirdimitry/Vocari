@@ -21,6 +21,7 @@ from vocari.rendering.overlay_window import MAX_SCALE, MIN_SCALE, OverlayWindow
 from vocari.rendering.stage import Stage
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.edge_provider import EdgeTTSProvider
+from vocari.tts.piper_provider import PiperTTSProvider
 from vocari.tts.service import enforce_length_limit
 from vocari.tts.silero_provider import SileroTTSProvider
 from vocari.tts.tts_queue import TTSQueue
@@ -216,7 +217,7 @@ def main() -> None:
         settings_window.bindings_tab.refresh_models()
         logger.info("Оверлей обновлён: модель '%s'", new_model.name)
 
-    tts_providers = {"edge": EdgeTTSProvider(), "silero": SileroTTSProvider()}
+    tts_providers = {"edge": EdgeTTSProvider(), "silero": SileroTTSProvider(), "piper": PiperTTSProvider()}
     audio_player = AudioPlayer()
     tts_queue = TTSQueue(config, tts_providers, audio_player, window)
 

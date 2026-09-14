@@ -164,11 +164,16 @@ class HotkeyConfig:
 
 @dataclass
 class TTSConfig:
-    provider: str = "edge"  # "edge" (cloud, free, no setup) | "silero" (local/offline)
+    provider: str = "edge"  # "edge" (cloud, free, no setup) | "silero" | "piper" (both local/offline)
     voice_ru: str = "ru-RU-SvetlanaNeural"  # edge-tts voice
     voice_en: str = "en-US-JennyNeural"  # edge-tts voice
     silero_voice_ru: str = "baya"
     silero_voice_en: str = "en_0"
+    # Piper voice ids (see vocari/tts/piper_provider.py) - whatever's been
+    # downloaded via Settings -> Piper; these two are just the default
+    # starter voices offered there.
+    piper_voice_ru: str = "ru_RU-irina-medium"
+    piper_voice_en: str = "en_US-lessac-medium"
     rate_percent: int = 0  # edge-tts speaking-rate offset, e.g. -10 .. +50 (Silero ignores this)
     volume_percent: int = 0  # playback volume offset, e.g. -50 .. +50 (applies to any provider)
     auto_detect_language: bool = True

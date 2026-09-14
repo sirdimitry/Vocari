@@ -22,6 +22,7 @@ from vocari.rendering.stage import AvatarInstance
 from vocari.tts.audio_player import AudioPlayer
 from vocari.tts.base import TTSProvider
 from vocari.tts.language import detect_language, split_by_script
+from vocari.tts.piper_provider import PiperTTSProvider
 from vocari.tts.registry import get_active_provider
 from vocari.tts.service import pick_voice, resolve_lang
 from vocari.tts.silero_provider import SileroTTSProvider
@@ -190,18 +191,29 @@ class TTSQueue(QObject):
 
     def _voice_pool(self, lang: str) -> list[str] | None:
         """The real pool "Случайный голос" should draw from for `lang`, if
-        one is actually known right now — for Silero, that means the model
-        for `lang` has actually been loaded (preloaded from Settings ->
-        Silero, or lazily by a previous synthesize() call) and can report
-        its true speaker list (e.g. all 119 v3_en names), rather than
-        falling back to pick_voice()'s small built-in static sample.
-        Returns None (defer to that static fallback) for edge-tts, or for
-        Silero before anything's loaded yet."""
-        if self.config.tts.provider != "silero":
-            return None
-        provider = self.providers.get("silero")
-        if isinstance(provider, SileroTTSProvider) and provider.is_loaded(lang):
-            return provider.speakers(lang) or None
+        one is actually known right now, instead of pick_voice()'s small
+        built-in static sample:
+        - Silero: the model for `lang` has to have actually been loaded
+          (preloaded from Settings -> Silero, or lazily by a previous
+          synthesize() call) to report its true speaker list (e.g. all 119
+          v3_en names).
+        - Piper: whatever voices have actually been downloaded for `lang`
+          (Settings -> Piper) - voice ids are named "<lang>_<REGION>-...",
+          so filtering by that prefix buckets them by language without
+          needing a separate per-voice language tag anywhere.
+        Returns None (defer to the static fallback) if nothing's loaded/
+        downloaded yet, or for edge-tts (whose small curated list is already
+        the real, complete option set)."""
+        provider_name = self.config.tts.provider
+        if provider_name == "silero":
+            provider = self.providers.get("silero")
+            if isinstance(provider, SileroTTSProvider) and provider.is_loaded(lang):
+                return provider.speakers(lang) or None
+        elif provider_name == "piper":
+            provider = self.providers.get("piper")
+            if isinstance(provider, PiperTTSProvider):
+                voices = [v for v in provider.available_voices() if v.startswith(f"{lang}_")]
+                return voices or None
         return None
 
     def _synthesis_parts(self, inst: AvatarInstance) -> list[SynthesisPart]:
