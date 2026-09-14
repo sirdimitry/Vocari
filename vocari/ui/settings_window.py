@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from vocari.__version__ import __version__
+from vocari.branding import app_icon
 from vocari.config.settings import AppConfig
 from vocari.rendering.model import AvatarModel
 from vocari.tts.base import TTSProvider
@@ -62,6 +63,7 @@ class SettingsWindow(QWidget):
         super().__init__()
         self.config = config
         self.setWindowTitle(f"Vocari — настройки (v{__version__})")
+        self.setWindowIcon(app_icon())
         # One fixed window size for every tab (tabs used to resize the window
         # to whatever the current one needed, so switching tabs made it jump
         # around and the tallest ones ran off the screen). Anything that

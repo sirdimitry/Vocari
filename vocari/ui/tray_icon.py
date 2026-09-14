@@ -5,13 +5,13 @@ standard Windows chrome.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from vocari.__version__ import __version__
+from vocari.branding import app_icon
 from vocari.logging_setup import get_logger
 from vocari.rendering.overlay_window import OverlayWindow
+from vocari.ui.about_dialog import AboutDialog
 from vocari.ui.log_window import LogWindow
 from vocari.ui.settings_window import SettingsWindow
 
@@ -30,8 +30,9 @@ class TrayController:
         self.app = app
         self.log_window = log_window
         self.settings_window = settings_window
+        self.about_dialog: AboutDialog | None = None
 
-        self.tray = QSystemTrayIcon(_build_icon())
+        self.tray = QSystemTrayIcon(app_icon())
         self.tray.setToolTip(f"Vocari v{__version__}")
 
         menu = QMenu()
@@ -43,6 +44,10 @@ class TrayController:
 
         log_action = menu.addAction("Лог…")
         log_action.triggered.connect(self._show_log)
+
+        menu.addSeparator()
+        about_action = menu.addAction("О программе…")
+        about_action.triggered.connect(self._show_about)
 
         menu.addSeparator()
         exit_action = menu.addAction("Выход")
@@ -71,30 +76,19 @@ class TrayController:
         self.settings_window.raise_()
         self.settings_window.activateWindow()
 
+    def _show_about(self) -> None:
+        # Built lazily (not in __init__) and kept around rather than
+        # recreated each click, matching how log_window/settings_window are
+        # already just shown/raised instead of rebuilt.
+        if self.about_dialog is None:
+            self.about_dialog = AboutDialog()
+        self.about_dialog.show()
+        self.about_dialog.raise_()
+        self.about_dialog.activateWindow()
+
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
             self._toggle_visibility()
-
-
-def _build_icon() -> QIcon:
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#6c5ce7"))
-    painter.drawRoundedRect(4, 4, 56, 56, 14, 14)
-
-    painter.setPen(QColor("white"))
-    font = painter.font()
-    font.setBold(True)
-    font.setPointSize(30)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "V")
-    painter.end()
-
-    return QIcon(pixmap)

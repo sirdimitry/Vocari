@@ -16,6 +16,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
+from vocari.branding import app_icon
 from vocari.config.settings import BubbleConfig, OverlayConfig, RenderConfig
 from vocari.logging_setup import get_logger
 from vocari.rendering import bubble
@@ -267,6 +268,7 @@ class OverlayWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setWindowTitle(f"Vocari - {model.name}")
+        self.setWindowIcon(app_icon())
 
         self._apply_geometry()
 

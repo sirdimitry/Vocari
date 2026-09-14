@@ -16,6 +16,12 @@
 ;
 ; Build: run "python installer\build_installer.py" (see README) — it fills
 ; in MyAppVersion from vocari/__version__.py and calls ISCC for you.
+;
+; Branding: SetupIconFile/WizardImageFile/WizardSmallImageFile below all
+; come from the app's real icon (assets/branding/) — installer\branding\
+; holds two PNG renders of it sized for Inno Setup's wizard image slots
+; (portrait sidebar + small corner logo); the wide GitHub banner doesn't fit
+; that shape without an ugly crop, so it isn't used here.
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
@@ -42,6 +48,9 @@ Compression=lzma2
 SolidCompression=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 WizardStyle=modern
+SetupIconFile=..\assets\branding\icon.ico
+WizardImageFile=branding\wizard_image.png
+WizardSmallImageFile=branding\wizard_small.png
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtGui import QCloseEvent, QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QHBoxLayout, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
+from vocari.branding import app_icon
 from vocari.logging_setup import log_bridge
 
 MAX_VISIBLE_LINES = 5000
@@ -30,6 +31,7 @@ class LogWindow(QWidget):
         super().__init__()
         self.log_file = log_file
         self.setWindowTitle("Vocari — лог")
+        self.setWindowIcon(app_icon())
         self.resize(640, 420)
         self.setStyleSheet("background-color:#0c0c0c;")
 
