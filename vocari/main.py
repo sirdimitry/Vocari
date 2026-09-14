@@ -289,7 +289,7 @@ def main() -> None:
         tts_queue,
         twitch_bot,
     )
-    tray = TrayController(window, app, log_window, settings_window)  # noqa: F841
+    tray = TrayController(window, app, log_window, settings_window, tts_queue)  # noqa: F841
 
     def on_quit() -> None:
         logger.info("Vocari завершает работу")

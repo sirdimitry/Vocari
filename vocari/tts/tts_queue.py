@@ -148,30 +148,46 @@ class TTSQueue(QObject):
             logger.exception("TTS-очередь: не удалось запустить синтез (id=%d)", instance_id)
             self.window.retire_speaker(instance_id)
 
-    def _spoken_text(self, inst: AvatarInstance) -> str:
-        """The text actually sent to TTS — the bubble's own text (inst.text)
-        stays just the message, since the sender's name is already shown
-        there separately; the announcement is audio-only, so it's prepended
-        here instead of touching what gets displayed."""
+    def _synthesis_parts(self, inst: AvatarInstance) -> list[tuple[str, str, str]]:
+        """Text segment(s) to synthesize, each already paired with its own
+        voice/lang. The bubble's own text (inst.text) stays just the
+        message, since the sender's name is already shown there separately
+        — the announcement is audio-only, prepended here instead.
+
+        The announce phrase gets picked a voice *separately* from the
+        message, not folded into one combined string synthesized with a
+        single voice: a voice can typically only pronounce the language it
+        was built for, so e.g. a Russian phrase glued onto an English
+        message and read by one English voice would silently drop or mangle
+        the Russian half. Two parts means two provider.synthesize() calls
+        (see SynthesisWorker), each correctly detected/voiced on its own —
+        same reasoning as the existing "detect from the message alone, not
+        the combined text" note below, just applied to both sides now."""
         config = self.config.bubble
-        if not config.announce_nick or not inst.author:
-            return inst.text
-        phrase = config.announce_phrase.replace("Ник", inst.author).strip()
-        return f"{phrase}. {inst.text}" if phrase else inst.text
+        if config.announce_nick and inst.author:
+            phrase = config.announce_phrase.replace("Ник", inst.author).strip()
+            if phrase:
+                phrase_voice, phrase_lang = pick_voice(phrase, self.config.tts)
+                message_voice, message_lang = pick_voice(inst.text, self.config.tts)
+                return [(phrase, phrase_voice, phrase_lang), (inst.text, message_voice, message_lang)]
+        # Voice/language are picked from the message alone — a short fixed
+        # phrase (if any got folded in above) shouldn't be allowed to sway
+        # auto-detection against what's actually the bulk of the utterance.
+        voice, lang = pick_voice(inst.text, self.config.tts)
+        return [(inst.text, voice, lang)]
 
     def _start_synthesis(self, instance_id: int) -> None:
         inst = self.window.stage.get(instance_id)
         if inst is None:
             return
-        # Voice/language are picked from the message alone — the announce
-        # phrase is a fixed, separately-authored string, so letting it sway
-        # auto-detection (especially against a short message) would be more
-        # likely to pick the wrong language than to help.
-        voice, lang = pick_voice(inst.text, self.config.tts)
-        text = self._spoken_text(inst)
+        parts = self._synthesis_parts(inst)
         rate = f"{self.config.tts.rate_percent:+d}%"
         provider = get_active_provider(self.config.tts, self.providers)
-        logger.info("TTS-очередь: синтез '%s' provider=%s voice=%s", text, self.config.tts.provider, voice)
+        logger.info(
+            "TTS-очередь: синтез %s provider=%s",
+            " + ".join(f"'{text}' voice={voice}" for text, voice, _lang in parts),
+            self.config.tts.provider,
+        )
 
         # Only one synthesis is ever in flight at a time (Stage guarantees
         # speaker_ready can't fire again until the current speaker has fully
@@ -182,7 +198,7 @@ class TTSQueue(QObject):
         self._speaker_arrived_at = time.monotonic()
 
         self._thread = QThread(self)
-        self._worker = SynthesisWorker(provider, text, voice, lang, rate)
+        self._worker = SynthesisWorker(provider, parts, rate)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         # A plain bound QObject-method slot, NOT a lambda/functools.partial:

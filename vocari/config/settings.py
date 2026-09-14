@@ -103,7 +103,7 @@ class BubbleConfig:
     style: str = "cloud"
     custom_image: str = ""  # PNG used when style == "custom" (9-slice stretched)
     scale: float = 1.0  # 0.5..2.0, on top of the automatic text-driven sizing
-    appear_speed: int = 50  # 1..100, how fast it pops in (same dial style as exit_speed)
+    appear_speed: int = 90  # 1..100, how fast it pops in (same dial style as exit_speed)
     # Hard ceiling on the bubble, as a fraction of the avatar's canvas width /
     # height — the bubble grows to fit the text but never past this.
     max_width_fraction: float = 1.6
@@ -119,9 +119,12 @@ class BubbleConfig:
     border_color: str = "#2b2b33"
     # Overall backdrop transparency, 0..100 (%). Multiplies the fill/outline
     # alpha; the text itself stays fully opaque so it never becomes unreadable.
-    opacity: int = 100
+    # Default is 0 (backdrop fully invisible) on purpose: with white text and
+    # a dark stroke (below), that reads clean over any stream background
+    # without needing a visible bubble shape behind it at all.
+    opacity: int = 0
 
-    text_color: str = "#16161a"
+    text_color: str = "#ffffffff"  # white — see the opacity note above
     text_font: str = "Cascadia Code"
     text_size: int = 46
     # Outline drawn behind the fill so the text stays legible over any
@@ -146,8 +149,8 @@ class BubbleConfig:
     # stays just the message, since the nickname is already shown there
     # separately. "Ник" in the phrase is replaced with the actual sender
     # name; leave it out to speak a fixed phrase with no name at all.
-    announce_nick: bool = False
-    announce_phrase: str = "Ник прислал сообщение"
+    announce_nick: bool = True
+    announce_phrase: str = "Ник навайбкодил"
 
 
 @dataclass

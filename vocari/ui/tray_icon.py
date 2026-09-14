@@ -11,6 +11,7 @@ from vocari.__version__ import __version__
 from vocari.branding import app_icon
 from vocari.logging_setup import get_logger
 from vocari.rendering.overlay_window import OverlayWindow
+from vocari.tts.tts_queue import TTSQueue
 from vocari.ui.about_dialog import AboutDialog
 from vocari.ui.log_window import LogWindow
 from vocari.ui.settings_window import SettingsWindow
@@ -25,11 +26,13 @@ class TrayController:
         app: QApplication,
         log_window: LogWindow,
         settings_window: SettingsWindow,
+        tts_queue: TTSQueue,
     ):
         self.window = window
         self.app = app
         self.log_window = log_window
         self.settings_window = settings_window
+        self.tts_queue = tts_queue
         self.about_dialog: AboutDialog | None = None
 
         self.tray = QSystemTrayIcon(app_icon())
@@ -63,6 +66,17 @@ class TrayController:
 
     def _toggle_visibility(self) -> None:
         visible = not self.window.isVisible()
+        if not visible:
+            # Hiding the window stops it from being drawn, but does nothing
+            # about whatever's mid-utterance - the audio (and the mouth/
+            # bounce state driving it) would otherwise keep running for a
+            # currently-speaking avatar entirely off-screen, invisibly, for
+            # as long as that line takes, and still be mid-speech whenever
+            # the avatar is shown again. Skipping it here is the same thing
+            # the skip hotkey already does: stop the audio and send this
+            # instance off stage immediately (which nobody sees, since the
+            # window's about to be hidden anyway).
+            self.tts_queue.skip_current()
         self.window.setVisible(visible)
         logger.info("Аватар %s", "показан" if visible else "скрыт")
 
