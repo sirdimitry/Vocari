@@ -1,75 +1,92 @@
 # Vocari
 
-<p align="center"><img src="assets/branding/banner_github.png" width="800" alt="Vocari — говорящий аватар, управляемый чатом"></p>
+🇷🇺 [Русская версия](README.ru.md)
 
-Оживляет набор PNG-слоёв в говорящего 2D-персонажа для стрима: прозрачный оверлей (для захвата в OBS), который выпрыгивает на сцену озвучить команду `!tts <текст>` из Twitch-чата, открывая рот и моргая синхронно с озвучкой, и упрыгивает обратно — а если сообщений несколько подряд, на сцене одновременно видно очередь из нескольких копий персонажа.
+<p align="center"><img src="assets/branding/banner_github.png" width="800" alt="Vocari — a talking avatar driven by chat"></p>
 
-<p align="center"><img src="docs/preview.png" width="420" alt="Аватар Ariral, рендер Vocari"></p>
+Turns a set of PNG layers into a talking 2D character for streaming: a transparent overlay (for OBS capture) that jumps onto the scene to speak a `!tts <text>` command from Twitch chat, opening its mouth and blinking in sync with the speech, then jumps back off — and if several messages arrive back to back, the stage shows a queue of several character copies at once.
 
-## Установка
+<p align="center"><img src="docs/preview.png" width="420" alt="The Ariral avatar, rendered by Vocari"></p>
+
+## Installation
+
+**[Download the Windows installer](https://github.com/sirdimitry/Vocari/releases/tag/latest)** — a permanent link that always points at the latest build. Download `VocariSetup-X.Y.Z.exe` and run it. The installer:
+- installs the app into `%LOCALAPPDATA%\Programs\Vocari` — **no administrator rights, no UAC** (same as VS Code/Discord);
+- silently installs the Microsoft Visual C++ Redistributable if it's missing (the one step where Windows asks for confirmation once — it's a system component, python312.dll won't start without it, but it's already present on most machines anyway);
+- creates Start Menu and desktop shortcuts, and a proper uninstall entry under "Add or remove programs".
+
+If you still get an error after installing, your antivirus most likely deleted or quarantined files under `_internal\` (unsigned PyInstaller builds sometimes trigger false positives) — check its quarantine/log and add the folder to exclusions.
+
+Want to run from source or build it yourself — see "For developers" below.
+
+## How to use it
+
+- Dragging the window: hold the left mouse button and drag the avatar (not the window's left edge — the window is wider than the visible character, see the OBS note below).
+- Scale: mouse wheel.
+- It blinks on its own (randomly every 2–6 s); the ahoge sways in an arc from its base like a real strand of hair; the ears, when the avatar bounces, rotate from the attachment point with a little lag (the edge near the head moves immediately, the tip catches up a beat later by inertia); and the whole figure (body, head, hair, ears) gently bobs up and down while idle and bounces more noticeably while speaking — also automatic (toggled off with the "Покачивание"/Sway switch in settings).
+- **The avatar is hidden until someone writes `!tts`.** On command it jumps in from the left to its X/Y position (set by dragging or in the "Model" tab) — the jump's duration naturally covers the TTS synthesis delay (especially noticeable with Silero on first use), then it speaks, holds the pose for 1 second, mirrors horizontally and jumps back off the left edge — always, even if it was the only message. If messages arrive one after another, new copies jump in and queue up to the left of whoever's already speaking (up to 6 waiting + 1 speaking = 7 on stage at once; beyond that, they simply wait their turn with no visible copy yet). Every copy on stage blinks and sways on its own random rhythm — not in sync with the others.
+
+**How the queue works.** Stage positions, front to back:
+
+| position | who's there |
+|---|---|
+| 1 | the speaker, 100% size |
+| 2 | always empty — a gap separating the speaker from the queue |
+| 3…8 | the queue itself, packed with no gaps: 90%, 85%, 80%, 75%, 70%, 65% |
+
+So up to 7 avatars are visible at once (the speaker + 6 queued). Once the speaker finishes and leaves, **the whole queue steps forward**: the nearest one in line takes the speaker's spot, everyone else shifts up one position and grows slightly. Messages beyond seven wait in an invisible backlog and join the tail of the queue as soon as a spot frees up — the queue always stays packed, newcomers never cut in line.
+
+**The speech bubble.** While the avatar talks, a bubble with the sender's nickname and the message itself hovers above it. The order is strict: the avatar arrives → the bubble rises → the speech plays → the bubble disappears → only then does the avatar mirror and leave. The bubble's size adapts to the text: a short message gets a compact bubble, a long one wraps across 2–4 lines, and if it still doesn't fit, the font size smoothly shrinks to keep the text inside. Configurable on the "Облачко"/Bubble tab: five built-in shapes (cloud, rounded rectangle, oval, glass, banner) or your own PNG (9-slice stretched), background/outline colors, size, appearance speed, separate font/size/color for the message and the nickname, and position relative to the avatar. The same tab has a test field: type a nickname and text (a rhyme is filled in by default) and click "Тест"/Test — the avatar comes out and delivers that message for real.
+
+### Capturing in OBS
+
+1. Source → **"Window Capture"**.
+2. In the "Window" list pick **`[python.exe]: Vocari - <model>`** (or `[Vocari.exe]: …` for a built copy).
+3. **"Capture Method" → "Windows 10 (1903 and later)"** — this is required. The window is transparent (layered), and the old BitBlt method can't capture windows like that: the source would stay blank. "Automatic" often picks BitBlt too.
+
+The window is deliberately **not** marked as a tool window: that flag used to hide Vocari from OBS's window list entirely. The side effect is it's now visible in the taskbar and Alt-Tab, which also helps you find it if it gets buried under other windows.
+
+- The window is deliberately borderless with no close button — so OBS Window Capture only picks up the avatar(s), no title bar or edges. **The window is now noticeably wider than the character itself** (room on the left for a queue of up to 7 plus space for entering/exiting off-frame) — if you crop the source to the character's size in OBS, don't crop it too tight, or the entrance/queue won't be visible on stream. Controlled through the system tray icon (the "V" icon):
+  - double-click the icon, or the "Скрыть/Показать аватар" (Show/hide avatar) item — toggles visibility (regardless of whether it's currently speaking);
+  - "Настройки…" (Settings…) — a settings window with tabs:
+    - "Рендер" (Render) — the "Поверх всех окон" (Always on top) switch (turn it off if you want to open a game or another app on top of the avatar on your own screen — doesn't affect OBS Window Capture, which grabs the window's contents by handle, not by screen area), a GPU (RTX) / CPU switch (for now it only saves the choice, an actual GPU backend is still ahead), and a "Покачивание" (Sway) switch (the ahoge arc, ears with lag, idle background sway, body bounce while speaking);
+    - "Модель" (Model) — a "Выбрать папку со своей моделью…" (Choose a folder with your own model…) button (see below), next to it a "Порядок слоёв…" (Layer order…) button (a large avatar preview on a black background on the left, a list of layers on the right — drag with the mouse to change the bottom-to-top draw order, the layer selected in the list glows blue on the preview; "Как было"/"По номерам" (As it was / By number) buttons reset the order), plus exact X/Y/scale fields for the overlay — the same coordinates as the speaker's position on stage (dragging and scrolling on the avatar itself do the same thing), with an "Применить" (Apply) button;
+    - "Ники" (Nicknames) — pin a specific avatar to a specific chat nickname: messages from a pinned nickname are always voiced by that avatar, regardless of whether "Случайный аватар" (Random avatar) is on in "Модель" — unpinned (anonymous) senders still get the usual random pick. The nickname list fills itself in as soon as someone writes `!tts` in Twitch chat — you can pin them right away, mid-stream, no restart needed; or add a nickname by hand ahead of time. The same tab has "Шанс появления в случайном режиме" (Odds of showing up in random mode): a 0–300% slider per model (100% — an equal share with everyone else, 0% — doesn't take part in random selection, but is still available for a manual nickname pin); the model list and its odds, like the nickname list, update themselves when a model is imported or deleted — a deleted model's pins/odds are cleared automatically;
+    - "TTS" — choice of voice engine (Edge TTS / Silero), a separate voice for RU and EN (for Edge, any voice name can be typed in manually; for Silero, a list of the selected language's voices), speech rate (Silero doesn't support it and the field is disabled in that mode), volume, text length limit, an auto-detect-language switch (and manual language choice when it's off), a "Случайный голос" (Random voice) switch — when on, every phrase is voiced by a random voice from the selected engine's set;
+    - "Silero" — if torch hasn't been downloaded yet (see below), instead of the preload buttons there's a "Скачать офлайн-голоса" (Download offline voices) button (~160 MB, one time) with progress and a prompt to restart Vocari once it's done; after that it works as usual — preloading the offline model (separately for RU and EN): without it, the first message has a delay (download + model warm-up), after preloading it's nearly instant. Runs strictly on CPU — the same on any graphics card or none at all. Models download into `silero_cache/` in the project root (not the user's home folder) — that folder is in `.gitignore`, it won't end up in git;
+    - "Twitch" — channel, OAuth token (with a button that opens the token page and a step-by-step guide), a "Подключиться к чату" (Connect to chat) button with connection status, the trigger command, cooldown, access by subscriber/VIP/moderator status, a word blacklist.
+  - "Лог…" (Log…) — a separate window with the app's log, terminal-styled (black background): normal messages in white, warnings in yellow, errors in red. Scrollable; "Очистить" (Clear) wipes both the view and the `logs/vocari.log` file; "Закрыть" (Close) minimizes the window (doesn't end the process); the log file resets itself once it reaches 10 MB;
+  - "Выход" (Exit) — closes the app (saves position/scale to `config.json`).
+  - Escape also hides the avatar window (doesn't close the whole app).
+
+Position, scale, and model path are saved to `config.json` in the project root between runs. The file is encrypted with Windows DPAPI (tied to the current Windows account on this machine) — it's not readable plain JSON but binary data, so it can't be opened and hand-edited in Notepad (see `vocari/config/dpapi.py`).
+
+**On speech latency:** edge-tts is a cloud service (Microsoft Edge's free neural voices), not a local model — every synthesis is a request over the internet, hence a roughly 1–3 s delay before playback starts. Silero (the "Silero" settings tab) is a free offline provider: after preloading, synthesis runs on the CPU with no network and noticeably faster (in testing, a fraction of a second for a short phrase once warmed up).
+
+## For developers
+
+Running from source instead of the installer — e.g. to change something in the code.
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 ```
 
-Silero (офлайн TTS-провайдер) требует ещё и `torch` — он намеренно не в `requirements.txt`, потому что `pip install torch` по умолчанию на Windows ставит огромную сборку с поддержкой CUDA (NVIDIA) даже там, где видеокарты вообще нет. Ставьте CPU-сборку явно (работает одинаково на любом железе — Intel/AMD, с любой видеокартой или без неё):
+Silero (the offline TTS provider) also needs `torch` — it's deliberately not in `requirements.txt`, because `pip install torch` installs a huge CUDA (NVIDIA) build by default on Windows even on machines with no graphics card at all. Install the CPU build explicitly instead (works the same on any hardware — Intel/AMD, with any graphics card or none):
 
 ```powershell
 .\.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Без этого шага приложение всё равно запускается и работает — просто в настройках TTS будет доступен только Edge TTS, а вкладка Silero предложит кнопку "Скачать офлайн-голоса" вместо списка голосов (см. "Сборка .exe" — там то же самое происходит автоматически, без ручного pip install, и это единственный способ получить Silero в упакованном `.exe`).
+Without this step the app still starts and runs — only Edge TTS will be available in TTS settings, and the Silero tab will offer a "Download offline voices" button instead of a voice list (see "Building the .exe" below — the same thing happens automatically there, no manual pip install needed, and it's the only way to get Silero in the packaged `.exe`).
 
-## Запуск
+Run it:
 
 ```powershell
 .\.venv\Scripts\python.exe -m vocari.main
 ```
 
-- Перетаскивание окна: зажать левую кнопку мыши и тащить аватар (не левый край окна — окно шире, чем видимый персонаж, см. ниже про OBS).
-- Масштаб: колесо мыши.
-- Моргает само (случайно раз в 2–6 сек); ахоге покачивается дугой от основания, как настоящая прядь волос; уши при подпрыгивании поворачиваются от точки крепления к голове с небольшим запаздыванием (край у головы движется сразу, кончик уха — по инерции чуть позже); а вся фигурка целиком (тело, голова, волосы, уши) слегка покачивается вверх-вниз в простое и заметнее подпрыгивает во время речи — тоже само (отключается тумблером "Покачивание" в настройках).
-- **Аватар скрыт, пока никто не написал `!tts`.** По команде он выпрыгивает слева на позицию X/Y (заданную перетаскиванием или во вкладке "Модель") — пауза на время прыжка естественно маскирует задержку синтеза TTS (особенно заметную у Silero при первом запуске), затем говорит, держит позу 1 секунду, зеркалится по горизонтали и упрыгивает обратно за левый край — всегда, даже если сообщение было единственным. Если сообщения приходят одно за другим, новые копии выпрыгивают и встают в очередь левее уже говорящей (до 6 ожидающих + 1 говорящий = 7 одновременно на сцене; сверх этого — просто ждут своей очереди без видимой копии). Каждая копия на сцене моргает и покачивается в своём собственном, случайном ритме — не синхронно с остальными.
-
-**Как устроена очередь.** Позиции на сцене, спереди назад:
-
-| позиция | кто там |
-|---|---|
-| 1 | говорящий, 100% размера |
-| 2 | всегда пустая — зазор, отделяющий говорящего от очереди |
-| 3…8 | сама очередь, вплотную, без дырок: 90%, 85%, 80%, 75%, 70%, 65% |
-
-Итого одновременно видно до 7 аватаров (говорящий + 6 в очереди). Когда говорящий договорил и уехал, **вся очередь шагает вперёд**: ближайший ожидающий встаёт на место говорящего, остальные подтягиваются на одну позицию и заодно немного подрастают. Сообщения сверх семи ждут в невидимом резерве и подъезжают в хвост очереди, как только освобождается место, — очередь всегда плотная, новички никогда не влезают вперёд.
-
-**Облачко с текстом.** Пока аватар говорит, над ним висит подложка с ником отправителя и самим сообщением. Порядок строгий: аватар приезжает → поднимается облачко → звучит речь → облачко исчезает → и только потом аватар зеркалится и уезжает. Размер подложки подстраивается под текст: короткое сообщение даёт компактный пузырь, длинное переносится по словам на 2–4 строки, а если и так не влезает — кегль текста плавно уменьшается, чтобы текст остался внутри подложки. Настраивается на вкладке «Облачко»: пять встроенных форм (облако, скруглённый прямоугольник, овал, стекло, плашка) или своя PNG-картинка (растягивается 9-slice), цвета подложки и обводки, размер, скорость появления, отдельно шрифт/размер/цвет сообщения и ника, и положение относительно аватара. Там же — поле теста: вводите ник и текст (по умолчанию подставляется стишок) и жмёте «Тест», аватар выезжает с этим сообщением по-настоящему.
-
-### Захват в OBS
-
-1. Источник → **«Захват окна»** (Window Capture).
-2. В списке «Окно» выбрать **`[python.exe]: Vocari - <модель>`** (или `[Vocari.exe]: …` для собранной версии).
-3. **«Метод захвата» → «Windows 10 (1903 и новее)»** — это обязательно. Окно прозрачное (layered), а старый метод BitBlt такие окна не умеет захватывать: источник останется пустым. «Автоматически» тоже часто выбирает BitBlt.
-
-Окно намеренно **не** помечено как tool-window: именно этот флаг раньше полностью прятал Vocari из списка окон OBS. Побочный эффект — теперь оно видно в панели задач и Alt+Tab, что заодно помогает найти его, если потеряли за другими окнами.
-
-- Окно намеренно без рамки и крестика — так OBS Window Capture захватывает только аватар(ов), без title bar и границ. **Окно теперь заметно шире самого персонажа** (запас слева под очередь из 7 копий плюс место для входа/выхода за кадр) — если в OBS обрезаете источник по размеру персонажа, не обрезайте слишком туго, иначе выезд/очередь будут не видны в трансляции. Управление — через иконку в системном трее (значок "V"):
-  - двойной клик по иконке или пункт "Скрыть/Показать аватар" — переключить видимость (независимо от того, говорит ли он сейчас);
-  - "Настройки…" — окно настроек с вкладками:
-    - "Рендер" — тумблер "Поверх всех окон" (выключите, чтобы можно было открыть поверх аватара игру или другое приложение на своём экране — на запись через OBS Window Capture это не влияет, он берёт содержимое окна по хэндлу, а не по области экрана), тумблер GPU (RTX) / CPU (пока только сохраняет выбор, сам GPU-бэкенд впереди) и тумблер "Покачивание" (ахоге дугой, уши с запаздыванием, фоновое покачивание в простое, подпрыгивание тела при речи);
-    - "Модель" — кнопка "Выбрать папку со своей моделью…" (см. ниже), рядом кнопка "Порядок слоёв…" (крупное превью аватара на чёрном фоне слева и список слоёв справа — перетаскиванием мышью меняете порядок отрисовки снизу вверх, выбранный в списке слой подсвечивается на превью голубым свечением; кнопки "Как было"/"По номерам" сбрасывают порядок), плюс точные поля X/Y/масштаб оверлея — те же координаты, что и позиция говорящего на сцене (перетаскивание и колесо мыши на самом аватаре делают то же самое), с кнопкой "Применить";
-    - "Ники" — привязка конкретного аватара к конкретному чат-нику: сообщения от привязанного ника всегда озвучивает именно этот аватар, независимо от того, включён ли "Случайный аватар" в "Модели" — непривязанные (анонимные) отправители по-прежнему получают обычный случайный выбор. Список ников пополняется сам, как только человек написал `!tts` в Twitch-чате — привязать можно сразу, посреди эфира, без перезапуска; либо добавить ник вручную заранее, не дожидаясь сообщения. Там же — "Шанс появления в случайном режиме": ползунок 0-300% на каждую модель (100% — как у всех поровну, 0% — не участвует в случайном выборе, но всё ещё доступен для ручной привязки по нику); список моделей и их веса, как и список ников, обновляются сами при импорте/удалении модели — привязки/веса удалённой модели снимаются автоматически;
-    - "TTS" — выбор движка озвучки (Edge TTS / Silero), голос отдельно для RU и для EN (для Edge — можно ввести любой голос вручную; для Silero — список голосов выбранного языка), скорость речи (Silero её не поддерживает и в этом режиме поле выключается), громкость, лимит длины текста, тумблер автоопределения языка (и ручной выбор языка, когда он выключен), тумблер "Случайный голос" — при включении каждая фраза озвучивается случайным голосом из набора выбранного движка;
-    - "Silero" — если torch ещё не скачан (см. ниже), вместо предзагрузки — кнопка "Скачать офлайн-голоса" (~160 МБ, один раз) с прогрессом и просьбой перезапустить Vocari по готовности; дальше как обычно — предзагрузка офлайн-модели (отдельно для RU и EN): без неё первое сообщение идёт с задержкой (скачивание + разогрев модели), после предзагрузки — почти мгновенно. Работает строго на CPU — одинаково на любой видеокарте или вообще без неё. Модели скачиваются в `silero_cache/` в корне проекта (не в домашнюю папку пользователя) — папка в `.gitignore`, не попадёт в git;
-    - "Twitch" — канал, OAuth-токен (с кнопкой открытия страницы получения токена и пошаговой инструкцией), кнопка "Подключиться к чату" со статусом соединения, команда-триггер, кулдаун, доступ по подписке/VIP/модераторству, чёрный список слов.
-  - "Лог…" — отдельное окно с логом приложения в стиле терминала (чёрный фон): обычные сообщения белым, предупреждения жёлтым, ошибки красным. Скроллится, "Очистить" стирает и файл `logs/vocari.log`, "Закрыть" сворачивает окно (не завершает процесс); лог-файл сам обнуляется по достижении 10 МБ;
-  - "Выход" — закрыть приложение (сохранит позицию/масштаб в `config.json`).
-  - Escape тоже скрывает окно аватара (не закрывает приложение целиком).
-
-Позиция, масштаб и путь к модели сохраняются в `config.json` в корне проекта между запусками. Файл зашифрован через Windows DPAPI (привязано к текущей учётной записи Windows на этой машине) — это не читаемый текстом JSON, а бинарные данные, так что открыть и вручную отредактировать его в Блокноте не получится (см. `vocari/config/dpapi.py`).
-
-**О задержке озвучки:** edge-tts — облачный сервис (бесплатные нейро-голоса Microsoft Edge), а не локальная модель — каждый синтез это запрос через интернет, отсюда задержка в районе 1–3 сек перед началом воспроизведения. Silero (вкладка "Silero" в настройках) — бесплатный офлайн-провайдер: после предзагрузки синтез идёт на CPU без сети и заметно быстрее (в тестах — доли секунды на короткую фразу после разогрева).
-
-## Сборка .exe
+### Building the .exe
 
 ```powershell
 .\.venv\Scripts\pip install -r requirements-dev.txt
@@ -77,89 +94,89 @@ Silero (офлайн TTS-провайдер) требует ещё и `torch` �
 xcopy /E /I assets dist\Vocari\assets
 ```
 
-Результат — папка `dist\Vocari\` (не один файл: `--onedir`, не `--onefile`) с `Vocari.exe` и служебной `_internal\`. Эту папку целиком можно переносить/архивировать и раздавать — `config.json`, `logs\` и `silero_cache\` создаются рядом с `Vocari.exe` при первом запуске, точно так же, как рядом со скриптом при запуске из исходников (см. `vocari/paths.py`), и никогда не оказываются внутри сборки.
+The result is a `dist\Vocari\` folder (not a single file: `--onedir`, not `--onefile`) with `Vocari.exe` and a supporting `_internal\`. The whole folder can be moved/archived and handed out as-is — `config.json`, `logs\`, and `silero_cache\` are created next to `Vocari.exe` on first run, exactly like next to the script when running from source (see `vocari/paths.py`), and never end up inside the build itself.
 
-torch (а с ним и Silero) намеренно **исключён** из сборки (`excludes` в `vocari.spec`) — даже если он стоит в вашем `.venv` для разработки, в `.exe` он не попадёт: ~600 МБ пришлось бы платить каждому пользователю, даже тем, кто Silero не пользуется. Вместо этого вкладка Silero в настройках сама скачивает готовую CPU-сборку torch по запросу (кнопка "Скачать офлайн-голоса", ~160 МБ) из релиза `runtime-deps-torch-cpu-v1` этого же репозитория на GitHub — см. `vocari/runtime_deps.py`. Скачивается один раз в `runtime_deps\` рядом с `Vocari.exe` (тоже в `.gitignore`), после чего приложение просит перезапуститься — дальше Silero работает полностью офлайн, без повторных обращений в сеть.
+torch (and Silero with it) is deliberately **excluded** from the build (`excludes` in `vocari.spec`) — even if it's installed in your dev `.venv`, it won't make it into the `.exe`: ~600 MB is a cost every user would pay, even the ones who never touch Silero. Instead, the Silero settings tab downloads a prebuilt CPU torch build on demand (the "Download offline voices" button, ~160 MB) from the `runtime-deps-torch-cpu-v1` release of this same GitHub repo — see `vocari/runtime_deps.py`. It downloads once into `runtime_deps\` next to `Vocari.exe` (also in `.gitignore`), after which the app asks to be restarted — from then on Silero works fully offline, with no further network calls.
 
-Модель Ariral (`assets/`) в сборку через PyInstaller не встраивается — копируется рядом обычной папкой (`xcopy` выше), чтобы импорт своих моделей (Настройки → Модель) мог дописывать туда новые папки, как при запуске из исходников.
+The Ariral model (`assets/`) isn't embedded into the build by PyInstaller — it's copied alongside as a plain folder (the `xcopy` above), so importing your own models (Settings → Model) can keep writing new folders there, same as when running from source.
 
-## Сборка установщика
+### Building the installer
 
-Готовую папку `dist\Vocari\` можно просто заархивировать и отдать — но **на чужом компьютере она может не запуститься** с ошибкой вида:
+The plain `dist\Vocari\` folder can just be zipped up and handed out — but **it may fail to start on someone else's machine** with an error like:
 
 ```
 Failed to load Python DLL '...\_internal\python312.dll'.
 LoadLibrary: The specified module could not be found.
 ```
 
-Это значит, что на той машине нет **Microsoft Visual C++ Redistributable (x64)** — от него зависит сам `python312.dll`, и без него приложение не стартует вообще. На машине разработчика он почти всегда уже стоит (его ставят Visual Studio, Python, куча игр), поэтому проблема видна только у "чистых" пользователей.
+That means the **Microsoft Visual C++ Redistributable (x64)** is missing on that machine — `python312.dll` itself depends on it, and the app won't start at all without it. It's almost always already present on a developer's machine (Visual Studio, Python, plenty of games install it), so the problem only shows up for "clean" users.
 
-Установщик решает это автоматически: проверяет наличие редистрибутива в реестре и доустанавливает его молча, только если его нет.
+The installer handles this automatically: it checks the registry for the redistributable and silently installs it, only if it's missing.
 
 ```powershell
-winget install JRSoftware.InnoSetup          # один раз
-curl -L -o installer\vc_redist.x64.exe https://aka.ms/vs/17/release/vc_redist.x64.exe   # один раз, ~25 МБ
+winget install JRSoftware.InnoSetup          # one time
+curl -L -o installer\vc_redist.x64.exe https://aka.ms/vs/17/release/vc_redist.x64.exe   # one time, ~25 MB
 .\.venv\Scripts\python.exe installer\build_installer.py
 ```
 
-Результат — `installer\output\VocariSetup-X.Y.Z.exe` (один файл, ~70 МБ), его и раздавайте. Он:
-- ставит приложение в `%LOCALAPPDATA%\Programs\Vocari` — **без прав администратора и без UAC** (как VS Code/Discord), и туда же спокойно пишутся `config.json`/`logs`/`silero_cache`;
-- при необходимости доустанавливает VC++ Redistributable (вот на этом шаге Windows один раз спросит подтверждение — редистрибутив системный, иначе никак);
-- делает ярлыки в меню "Пуск" и на рабочем столе, и полноценную деинсталляцию через "Установка и удаление программ".
+The result is `installer\output\VocariSetup-X.Y.Z.exe` (a single file, ~70 MB) — that's what you hand out. It:
+- installs the app into `%LOCALAPPDATA%\Programs\Vocari` — **no administrator rights, no UAC** (same as VS Code/Discord), and `config.json`/`logs`/`silero_cache` are written there without issue;
+- installs the VC++ Redistributable if needed (this is the one step where Windows will ask for confirmation once — it's a system component, there's no way around that);
+- creates Start Menu and desktop shortcuts, and a proper uninstall through "Add or remove programs".
 
-Если у клиента ошибка осталась даже после установки через `VocariSetup` — скорее всего его антивирус удалил или поместил в карантин файлы из `_internal\` (PyInstaller-сборки без цифровой подписи часто ловят ложные срабатывания). Пусть проверит журнал/карантин антивируса и добавит папку в исключения.
+If a client still gets the error even after installing via `VocariSetup` — their antivirus most likely deleted or quarantined files under `_internal\` (unsigned PyInstaller builds often trigger false positives). Have them check the antivirus log/quarantine and add the folder to exclusions.
 
-## Twitch-бот
+## Twitch bot
 
-Во вкладке "Twitch" укажите канал и OAuth-токен, нажмите "Подключиться к чату". Дальше бот сам:
-1. Слушает сообщения канала и берёт только те, что начинаются с команды-триггера (по умолчанию `!tts`, регистр не важен).
-2. Проверяет доступ (подписчики/VIP/модераторы — если ни один фильтр не включён, доступно всем), кулдаун на пользователя и чёрный список слов — в таком порядке, при первом несовпадении сообщение просто пропускается (в лог, без ответа в чат).
-3. Обрезает текст по лимиту длины (вкладка TTS) и ставит в очередь озвучки — сообщения проговариваются по одному, по очереди, не перебивая друг друга, даже если несколько зрителей написали команду одновременно.
+On the "Twitch" tab, enter the channel and OAuth token, click "Подключиться к чату" (Connect to chat). From there the bot:
+1. Listens to the channel's messages and only picks up ones starting with the trigger command (`!tts` by default, case-insensitive).
+2. Checks access (subscribers/VIP/moderators — if no filter is on, everyone has access), per-user cooldown, and a word blacklist — in that order; on the first mismatch the message is simply skipped (logged, no reply in chat).
+3. Trims the text to the length limit (TTS tab) and queues it for speech — messages are spoken one at a time, in order, never interrupting each other, even if several viewers send the command at the same moment.
 
-Работает через `twitchio` 2.x (классическая авторизация по токену — см. `requirements.txt`, почему версия зафиксирована ниже 3.0) поверх общей абстракции `vocari/chat/` — сам код обработки команд не завязан на Twitch-специфику, так что источник для YouTube можно будет добавить позже, реализовав тот же интерфейс `ChatSource`.
+Runs on `twitchio` 2.x (classic token-based auth — see `requirements.txt` for why the version is pinned below 3.0) on top of the shared `vocari/chat/` abstraction — the command-handling code itself isn't tied to Twitch specifics, so a YouTube source could be added later by implementing the same `ChatSource` interface.
 
-## Модели
+## Models
 
-Модель — это папка с PNG-слоями (все на одном холсте одинакового размера) и манифестом `model.json` рядом с ними. Формат манифеста и точная семантика полей описаны в docstring [vocari/rendering/model.py](vocari/rendering/model.py). Текущая модель по умолчанию — `assets/models/Ariral`.
+A model is a folder of PNG layers (all on one canvas of the same size) with a `model.json` manifest next to them. The manifest format and the exact semantics of each field are described in the docstring of [vocari/rendering/model.py](vocari/rendering/model.py). The current default model is `assets/models/Ariral`.
 
-## Структура проекта
+## Project layout
 
 ```
 vocari/
-  __version__.py — версия приложения (см. "Версионирование")
-  paths.py    — где лежат config.json/logs/silero_cache/assets — из исходников и из собранного .exe (см. "Сборка .exe")
-  hotkey.py   — глобальный хоткей пропуска фразы (RegisterHotKey, работает даже без фокуса на окне Vocari)
-  config/     — загрузка/сохранение настроек (config.json)
-  rendering/  — модель аватара (model.json), прозрачное окно оверлея, сцена (stage.py — очередь выпрыгивающих копий), автоимпорт своих моделей
-  tts/        — TTSProvider'ы (edge-tts, Silero), проигрывание звука + RMS-синхронизация рта, очередь озвучки, стишки для теста очереди (poems.py)
-  chat/       — источник чата абстрактно (ChatMessage/ChatSource) + чистые фильтры (кулдаун, доступ, чёрный список)
-  twitch/     — twitchio-реализация ChatSource + фоновый поток с подключением
-  ui/         — трей, окно настроек (Рендер/Модель/Облачко/TTS/Silero/Twitch), окно лога, превью позиции на экране (screen_preview.py)
+  __version__.py — app version (see "Versioning")
+  paths.py    — where config.json/logs/silero_cache/assets live — from source and from a built .exe (see "Building the .exe")
+  hotkey.py   — the global skip-current-phrase hotkey (RegisterHotKey, works even without focus on the Vocari window)
+  config/     — loading/saving settings (config.json)
+  rendering/  — the avatar model (model.json), the transparent overlay window, the stage (stage.py — the queue of jumping-in copies), auto-import of your own models
+  tts/        — TTSProviders (edge-tts, Silero), audio playback + RMS mouth sync, the speech queue, rhymes for testing the queue (poems.py)
+  chat/       — the chat source abstraction (ChatMessage/ChatSource) + pure filters (cooldown, access, blacklist)
+  twitch/     — the twitchio implementation of ChatSource + a background connection thread
+  ui/         — the tray, the settings window (Render/Model/Bubble/Nicknames/TTS/Silero/Twitch), the log window, the on-screen position preview (screen_preview.py)
 assets/
-  models/     — папки с PNG-слоями моделей
-run_vocari.py — точка входа для сборки (см. "Сборка .exe")
-vocari.spec   — конфигурация PyInstaller
+  models/     — folders of model PNG layers
+run_vocari.py — the entry point for the build (see "Building the .exe")
+vocari.spec   — PyInstaller configuration
 installer/
-  vocari.iss          — скрипт Inno Setup (см. "Сборка установщика")
-  build_installer.py  — подставляет версию и вызывает компилятор Inno Setup
+  vocari.iss          — the Inno Setup script (see "Building the installer")
+  build_installer.py  — fills in the version and calls the Inno Setup compiler
 ```
 
-## Совместимость с разным железом
+## Hardware compatibility
 
-Приложение должно одинаково работать и на мощном ПК с NVIDIA RTX, и на слабом ноутбуке без видеокарты, и на AMD Radeon — у зрителей и стримеров оборудование разное. Поэтому:
-- Silero TTS запускается строго на CPU (см. `vocari/tts/silero_provider.py`) — CUDA работает только на NVIDIA, а Silero и так спроектирован быстро работать без GPU;
-- torch ставится CPU-сборкой явно (см. "Установка") — не тянет CUDA-зависимости, которые никто, кроме владельцев NVIDIA, не использует;
-- рендер самого аватара — обычный software-рендеринг через QPainter, без привязки к конкретному GPU-вендору.
+The app should work the same on a powerful PC with an NVIDIA RTX card, on a weak laptop with no graphics card at all, and on AMD Radeon — viewers and streamers have all kinds of hardware. So:
+- Silero TTS runs strictly on CPU (see `vocari/tts/silero_provider.py`) — CUDA only works on NVIDIA, and Silero is designed to run fast without a GPU anyway;
+- torch is installed as an explicit CPU build (see "For developers") — it doesn't pull in CUDA dependencies that nobody but NVIDIA owners would use;
+- the avatar itself is rendered with plain software rendering via QPainter, with no tie to any particular GPU vendor.
 
-## Версионирование
+## Versioning
 
-Версия хранится в одном месте — [vocari/__version__.py](vocari/__version__.py) — и отображается в тултипе трея и заголовке окна настроек. Схема — [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
-- **PATCH** — багфиксы без новой функциональности;
-- **MINOR** — завершён очередной этап разработки или заметная фича;
-- **MAJOR** — после стабильного релиза (v1.0), для несовместимых изменений.
+The version lives in one place — [vocari/__version__.py](vocari/__version__.py) — and shows up in the tray tooltip and the settings window's title. The scheme is [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
+- **PATCH** — bug fixes with no new functionality;
+- **MINOR** — a development stage or a noticeable feature is complete;
+- **MAJOR** — after a stable release (v1.0), for breaking changes.
 
-При значимых изменениях версию в `__version__.py` нужно поднимать вручную и, по желанию, ставить git-тег того же номера (`git tag vX.Y.Z`) на коммите релиза.
+For significant changes, the version in `__version__.py` needs to be bumped by hand and, optionally, tagged with the matching git tag (`git tag vX.Y.Z`) on the release commit.
 
 ---
 
-навайбкодил — [@sirdimitry](https://github.com/sirdimitry)
+vibe-coded by — [@sirdimitry](https://github.com/sirdimitry)

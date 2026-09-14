@@ -85,6 +85,19 @@ def _apply_screen_defaults(config: AppConfig, model: AvatarModel) -> None:
 
 
 def main() -> None:
+    # Without an explicit AppUserModelID, Windows groups/represents a
+    # python.exe-hosted GUI app in the taskbar under python.exe's own icon
+    # (a Python logo) instead of whatever the window itself sets via
+    # setWindowIcon() — a well-known quirk for any Python GUI app run from
+    # source rather than as its own frozen .exe (which doesn't need this:
+    # it already has its own real PE icon resource, see vocari.spec).
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Vocari.Vocari.App")
+        except OSError:
+            pass
+
     # Before anything else — makes a previously-downloaded torch (see
     # runtime_deps.py / Settings -> Silero) importable again this run. A
     # dev venv with torch already installed the normal way is unaffected;
