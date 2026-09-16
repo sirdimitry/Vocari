@@ -6,7 +6,7 @@ subprocess Vocari launches fresh on every synthesize() call, not something
 loaded once into this process's own memory."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from vocari.logging_setup import get_logger
@@ -183,8 +183,21 @@ class PiperTab(QWidget):
         worker = _DownloadWorker(lambda on_progress, v=voice: download_voice(v, on_progress))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.progress.connect(lambda d, t, k=key: self._on_voice_progress(k, d, t))
-        worker.finished.connect(lambda err, v=voice: self._on_voice_finished(v, err))
+        # Qt can only auto-detect that a cross-thread signal needs queuing
+        # (rather than running the slot synchronously, right there on the
+        # emitting thread) when it's connected straight to a QObject's own
+        # method - a lambda has no thread affinity of its own to check, so
+        # without an explicit QueuedConnection here, _on_voice_progress ends
+        # up touching QProgressBar/QLabel directly from this background
+        # thread instead of the GUI thread. That's undefined behavior in Qt
+        # and is what caused a real segfault (recursive repaint, corrupted
+        # backing store) - not something that just happens to look flaky.
+        worker.progress.connect(
+            lambda d, t, k=key: self._on_voice_progress(k, d, t), Qt.ConnectionType.QueuedConnection
+        )
+        worker.finished.connect(
+            lambda err, v=voice: self._on_voice_finished(v, err), Qt.ConnectionType.QueuedConnection
+        )
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
