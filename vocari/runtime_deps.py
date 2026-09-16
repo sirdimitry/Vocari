@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -97,6 +98,28 @@ def _marker(dep: RuntimeDep) -> Path:
     return _dep_path(dep) / ".complete"
 
 
+_PROGRESS_MIN_INTERVAL_S = 0.1  # ~10 UI updates/sec - plenty smooth, far less repaint pressure than one per 256 KB chunk
+
+
+def _throttled(on_progress: Callable[[int, int], None]) -> Callable[[int, int], None]:
+    """Wraps `on_progress` so it's actually called at most a few times a
+    second instead of once per 256 KB chunk - on a fast connection that's
+    hundreds of QProgressBar repaints/sec, which on at least one real setup
+    (Linux, software-rendered Qt inside a VM) produced a stack-overflow
+    segfault deep in Qt's own repaint recursion. Always lets the very last
+    call through regardless of timing, so 100% still reliably lands."""
+    last_call = 0.0
+
+    def wrapped(downloaded: int, total: int) -> None:
+        nonlocal last_call
+        now = time.monotonic()
+        if (total > 0 and downloaded >= total) or now - last_call >= _PROGRESS_MIN_INTERVAL_S:
+            last_call = now
+            on_progress(downloaded, total)
+
+    return wrapped
+
+
 def is_downloaded(dep: RuntimeDep) -> bool:
     marker = _marker(dep)
     if not marker.exists():
@@ -140,6 +163,7 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
 
     logger.info("Скачивание %s: %s -> %s", dep.label, dep.url, target)
     tmp_zip = RUNTIME_DEPS_DIR / f"{dep.dir_name}.download.zip"
+    progress = _throttled(on_progress)
     try:
         try:
             with urllib.request.urlopen(dep.url) as response:
@@ -152,7 +176,7 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
                             break
                         f.write(chunk)
                         downloaded += len(chunk)
-                        on_progress(downloaded, total)
+                        progress(downloaded, total)
             logger.info("Скачано %s: %d байт (ожидалось %d)", dep.label, downloaded, total)
 
             target.mkdir(parents=True, exist_ok=True)
@@ -180,6 +204,7 @@ def download_raw_file(url: str, dest: Path, on_progress: Callable[[int, int], No
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest.with_suffix(dest.suffix + ".part")
     logger.info("Скачивание файла: %s -> %s", url, dest)
+    progress = _throttled(on_progress)
     try:
         try:
             with urllib.request.urlopen(url) as response:
@@ -192,7 +217,7 @@ def download_raw_file(url: str, dest: Path, on_progress: Callable[[int, int], No
                             break
                         f.write(chunk)
                         downloaded += len(chunk)
-                        on_progress(downloaded, total)
+                        progress(downloaded, total)
             logger.info("Скачан файл %s: %d байт (ожидалось %d)", dest.name, downloaded, total)
         except Exception:
             logger.exception("Не удалось скачать файл %s (%s)", dest.name, url)
