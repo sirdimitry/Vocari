@@ -16,6 +16,12 @@ omegaconf>=2.3
 # torch being excluded below.
 cryptography>=42; sys_platform != "win32"
 
+# Linux only (see vocari/rendering/x11_clickthrough.py) - Qt's own
+# WA_TransparentForMouseEvents doesn't give a standalone top-level window a
+# real X11 input shape, so the overlay punches one itself via the X Shape
+# extension instead.
+python-xlib>=0.33; sys_platform == "linux"
+
 # torch (for the Silero TTS provider) is intentionally NOT listed here — a
 # plain `pip install torch` pulls a large CUDA-bundled build by default on
 # Windows even on machines with no NVIDIA GPU at all. For dev work, install

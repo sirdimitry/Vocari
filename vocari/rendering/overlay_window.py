@@ -268,20 +268,32 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        # On X11, toggling WA_TransparentForMouseEvents live (in
-        # _update_click_transparency() below) after the window is already
-        # mapped turned out not to reliably take effect - reported as the
-        # whole desktop staying unclickable (tray icon included) even once
-        # the stage was empty, until some unrelated event (e.g. an Esc
-        # keypress) happened to force Qt/the X server to catch up. Rather
-        # than chase that further, this window is simply always
-        # transparent to mouse input on non-Windows - dragging the avatar
-        # by clicking it stops working there, but Settings -> Модель's X/Y
-        # fields are a full substitute, and this sidesteps the platform
-        # quirk entirely instead of trying to out-guess its timing.
+        # WA_TransparentForMouseEvents turns out not to give a standalone
+        # top-level window a real X11 input shape at all (confirmed by
+        # reading the window's actual Shape-extension INPUT region back
+        # from the X server: it covered 100% of the window's rect even
+        # though this attribute was set well before the window was ever
+        # mapped) - the *whole* desktop stayed unclickable under this
+        # window's rect (which is huge: sized for a worst-case 7-avatar
+        # queue, see _apply_geometry()) until some unrelated event (e.g. an
+        # Esc keypress, which actually just calls hide() below - it only
+        # ever looked like a fix because the swallowing window was gone,
+        # not because input routing recovered) forced Qt to catch up.
+        # x11_clickthrough punches a real, permanent input-shape hole
+        # instead, bypassing this attribute's X11 implementation entirely -
+        # dragging the avatar by clicking it stops working there, but
+        # Settings -> Модель's X/Y fields are a full substitute.
         self._supports_click_toggle = sys.platform == "win32"
         if not self._supports_click_toggle:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            if sys.platform.startswith("linux"):
+                # winId() forces the native (X11) window handle to exist
+                # right now instead of lazily at show() time, so the input
+                # shape is already in place before the window is ever
+                # mapped - no window of "visible but still fully opaque to
+                # clicks" at startup.
+                from vocari.rendering.x11_clickthrough import make_click_through
+                make_click_through(int(self.winId()))
         self.setWindowTitle(f"Vocari - {model.name}")
         self.setWindowIcon(app_icon())
 
@@ -390,6 +402,12 @@ class OverlayWindow(QWidget):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
         if was_visible:
             self.show()  # Qt requires re-showing after a window flag change
+        if not self._supports_click_toggle and sys.platform.startswith("linux"):
+            # A window-flag change can recreate the underlying X11 window,
+            # which would silently drop whatever input shape was set on the
+            # old one - reapply unconditionally rather than assume either way.
+            from vocari.rendering.x11_clickthrough import make_click_through
+            make_click_through(int(self.winId()))
 
     def reload_bubble_image(self) -> None:
         """(Re)loads the user's own bubble artwork after they pick a file."""
