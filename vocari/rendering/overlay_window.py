@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -267,6 +268,20 @@ class OverlayWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # On X11, toggling WA_TransparentForMouseEvents live (in
+        # _update_click_transparency() below) after the window is already
+        # mapped turned out not to reliably take effect - reported as the
+        # whole desktop staying unclickable (tray icon included) even once
+        # the stage was empty, until some unrelated event (e.g. an Esc
+        # keypress) happened to force Qt/the X server to catch up. Rather
+        # than chase that further, this window is simply always
+        # transparent to mouse input on non-Windows - dragging the avatar
+        # by clicking it stops working there, but Settings -> Модель's X/Y
+        # fields are a full substitute, and this sidesteps the platform
+        # quirk entirely instead of trying to out-guess its timing.
+        self._supports_click_toggle = sys.platform == "win32"
+        if not self._supports_click_toggle:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setWindowTitle(f"Vocari - {model.name}")
         self.setWindowIcon(app_icon())
 
@@ -679,7 +694,14 @@ class OverlayWindow(QWidget):
         dragging the currently-speaking avatar keeps working). It doesn't
         fix clicks landing in the empty corridor *while* something is
         speaking, but that's a much smaller window in practice than "any
-        time nobody has said anything recently"."""
+        time nobody has said anything recently".
+
+        Windows-only (see _supports_click_toggle in __init__) - on other
+        platforms the window is simply always transparent to mouse input,
+        set once and never toggled, since toggling it live turned out not
+        to reliably apply on X11."""
+        if not self._supports_click_toggle:
+            return
         should_be_transparent = not self.stage.instances
         if should_be_transparent != self.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents):
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, should_be_transparent)
