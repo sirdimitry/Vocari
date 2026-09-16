@@ -12,8 +12,8 @@ import random
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QRegion, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 from vocari.branding import app_icon
@@ -43,6 +43,7 @@ TWO_PI = 2 * math.pi
 SWAY_ROTATION_DEG = 11.0
 SWAY_PERIOD_S = 1.8
 SWAY_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / SWAY_PERIOD_S
+_CLICK_MASK_PADDING = 0.25  # fraction of an instance's own w/h added on every side - see _update_click_mask()
 BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
 IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle breathing-like bob, applied to every instance on stage
 IDLE_BOB_PERIOD_S = 2.4
@@ -649,6 +650,52 @@ class OverlayWindow(QWidget):
                 self._paint_bubble(painter, inst, canvas_w, canvas_h)
         finally:
             painter.end()
+
+        self._update_click_mask(stage_w, stage_h, left_margin, headroom, canvas_w, canvas_h)
+
+    def _update_click_mask(
+        self, stage_w: float, stage_h: float, left_margin: float, headroom: float,
+        canvas_w: int, canvas_h: int,
+    ) -> None:
+        """Without this, the *whole* window rectangle would swallow every
+        click/drag anywhere within it - including its empty, invisible
+        corridor and queue slots, which is most of it (the window is sized
+        for a worst-case 7 avatars on stage at once, see _apply_geometry()).
+        That's harmless when nothing else happens to sit under that
+        rectangle, but with WindowStaysOnTopHint it's *always* on top of
+        everything at that screen position - including, if the avatar is
+        placed or sized such that its corridor reaches there, other
+        windows or even the desktop's own taskbar/tray. A mask restricts
+        which parts of this window actually receive input (and are drawn -
+        setMask() clips both) at the OS/window-manager level to just where
+        an avatar is really standing right now - a plain per-instance
+        bounding box, not a true per-pixel shape (which would need
+        re-deriving from every layer's actual alpha each frame) - simple,
+        cheap for the handful of instances that can ever be on stage, and
+        enough to stop empty stage area from blocking clicks meant for
+        whatever's behind it. Padded generously beyond the nominal canvas
+        box (see _CLICK_MASK_PADDING) since painting itself moves pixels
+        outside it - the bounce hop, idle bob, and swaying layers (ahoge,
+        ears, ...) all animate past the canvas's own nominal edges; without
+        slack here the mask would visibly clip them mid-motion, not just
+        make that sliver unclickable."""
+        if not self.width() or not self.height() or not stage_w or not stage_h:
+            self.clearMask()
+            return
+        sx = self.width() / stage_w
+        sy = self.height() / stage_h
+
+        region = QRegion()
+        for inst in self.stage.instances:
+            slot_scale = self.stage.slot_scale(inst.slot)
+            x = left_margin + self.stage.draw_origin_x + inst.x_offset + canvas_w * (1 - slot_scale) / 2
+            y = headroom + canvas_h * (1 - slot_scale)
+            w = canvas_w * slot_scale
+            h = canvas_h * slot_scale
+            pad_x, pad_y = w * _CLICK_MASK_PADDING, h * _CLICK_MASK_PADDING
+            x, y, w, h = x - pad_x, y - pad_y, w + 2 * pad_x, h + 2 * pad_y
+            region += QRect(round(x * sx), round(y * sy), max(1, round(w * sx)), max(1, round(h * sy)))
+        self.setMask(region)
 
     def _paint_bubble(self, painter: QPainter, inst: AvatarInstance, canvas_w: int, canvas_h: int) -> None:
         config = self.bubble_config
