@@ -8,6 +8,7 @@ __pycache__/
 
 # Runtime-generated, machine-specific
 config.json
+.config.key
 logs/
 silero_cache/
 runtime_deps/

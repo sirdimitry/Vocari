@@ -11,6 +11,11 @@ soundfile>=0.12.1
 numpy>=1.26
 omegaconf>=2.3
 
+# Only needed off Windows (see vocari/config/dpapi.py) - the marker below
+# keeps it out of the Windows install/build entirely, same reasoning as
+# torch being excluded below.
+cryptography>=42; sys_platform != "win32"
+
 # torch (for the Silero TTS provider) is intentionally NOT listed here — a
 # plain `pip install torch` pulls a large CUDA-bundled build by default on
 # Windows even on machines with no NVIDIA GPU at all. For dev work, install
