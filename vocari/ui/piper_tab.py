@@ -6,7 +6,7 @@ subprocess Vocari launches fresh on every synthesize() call, not something
 loaded once into this process's own memory."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from vocari.logging_setup import get_logger
@@ -18,20 +18,31 @@ logger = get_logger("tts.piper_tab")
 
 
 class _DownloadWorker(QObject):
-    progress = Signal(int, int)
-    finished = Signal(str)  # error message, "" on success
+    # `key` identifies which row this download is for ("engine", or a voice
+    # id) and rides along in the signal itself - see PiperTab._on_progress/
+    # _on_finished below for why: connecting a cross-thread signal straight
+    # to those (bound QObject methods) lets Qt correctly auto-detect it
+    # needs a queued (not direct) delivery, landing the call back on the GUI
+    # thread where it's safe to touch widgets. A lambda closing over `key`
+    # doesn't have a thread of its own for Qt to detect that from - even an
+    # explicit QueuedConnection on such a lambda is silently not honored,
+    # which is what caused a real segfault (the slot running the wrong
+    # widgets update directly on this background thread instead).
+    progress = Signal(str, int, int)  # key, downloaded, total
+    finished = Signal(str, str)  # key, error message ("" on success)
 
-    def __init__(self, run_download):
+    def __init__(self, key: str, run_download):
         super().__init__()
+        self.key = key
         self._run_download = run_download
 
     def run(self) -> None:
         try:
-            self._run_download(lambda done, total: self.progress.emit(done, total))
-            self.finished.emit("")
+            self._run_download(lambda done, total: self.progress.emit(self.key, done, total))
+            self.finished.emit(self.key, "")
         except Exception as exc:  # noqa: BLE001 - surface any network/disk error to the UI
             logger.exception("Не удалось скачать (Piper)")
-            self.finished.emit(str(exc))
+            self.finished.emit(self.key, str(exc))
 
 
 class PiperTab(QWidget):
@@ -41,6 +52,7 @@ class PiperTab(QWidget):
         self.on_voices_loaded = on_voices_loaded
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, _DownloadWorker] = {}
+        self._voices_by_id = {v.voice_id: v for v in PIPER_VOICES}
 
         layout = QVBoxLayout(self)
 
@@ -125,33 +137,17 @@ class PiperTab(QWidget):
         logger.info("Запущено скачивание движка Piper")
 
         thread = QThread(self)
-        worker = _DownloadWorker(lambda on_progress: download_engine(PIPER_ENGINE, on_progress))
+        worker = _DownloadWorker("engine", lambda on_progress: download_engine(PIPER_ENGINE, on_progress))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.progress.connect(self._on_engine_progress)
-        worker.finished.connect(self._on_engine_finished)
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(self._on_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._threads["engine"] = thread
         self._workers["engine"] = worker
         thread.start()
-
-    def _on_engine_progress(self, downloaded: int, total: int) -> None:
-        if total > 0:
-            self.engine_progress.setRange(0, total)
-            self.engine_progress.setValue(downloaded)
-        self.engine_status.setText(f"скачано {downloaded // (1024 * 1024)} МБ")
-
-    def _on_engine_finished(self, error: str) -> None:
-        self.engine_progress.hide()
-        if error:
-            self.engine_status.setStyleSheet("color:#ff5c5c;")
-            self.engine_status.setText(f"ошибка: {error}")
-            self.engine_button.setEnabled(True)
-            return
-        logger.info("Движок Piper скачан")
-        self._refresh_engine_state()
 
     # -- voices ---------------------------------------------------------------
 
@@ -180,24 +176,11 @@ class PiperTab(QWidget):
         logger.info("Запущено скачивание голоса Piper '%s'", key)
 
         thread = QThread(self)
-        worker = _DownloadWorker(lambda on_progress, v=voice: download_voice(v, on_progress))
+        worker = _DownloadWorker(key, lambda on_progress, v=voice: download_voice(v, on_progress))
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        # Qt can only auto-detect that a cross-thread signal needs queuing
-        # (rather than running the slot synchronously, right there on the
-        # emitting thread) when it's connected straight to a QObject's own
-        # method - a lambda has no thread affinity of its own to check, so
-        # without an explicit QueuedConnection here, _on_voice_progress ends
-        # up touching QProgressBar/QLabel directly from this background
-        # thread instead of the GUI thread. That's undefined behavior in Qt
-        # and is what caused a real segfault (recursive repaint, corrupted
-        # backing store) - not something that just happens to look flaky.
-        worker.progress.connect(
-            lambda d, t, k=key: self._on_voice_progress(k, d, t), Qt.ConnectionType.QueuedConnection
-        )
-        worker.finished.connect(
-            lambda err, v=voice: self._on_voice_finished(v, err), Qt.ConnectionType.QueuedConnection
-        )
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(self._on_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -205,21 +188,40 @@ class PiperTab(QWidget):
         self._workers[key] = worker
         thread.start()
 
-    def _on_voice_progress(self, key: str, downloaded: int, total: int) -> None:
-        progress = self.voice_progress[key]
-        if total > 0:
-            progress.setRange(0, total)
-            progress.setValue(downloaded)
-        self.voice_status[key].setText(f"скачано {downloaded // (1024 * 1024)} МБ")
+    # -- shared progress/finished handling -------------------------------------
+    # One pair of handlers for both the engine and every voice download,
+    # dispatching on `key` ("engine", or a voice id) - see _DownloadWorker's
+    # docstring for why this replaced separate per-download lambdas.
 
-    def _on_voice_finished(self, voice: PiperVoice, error: str) -> None:
-        key = voice.voice_id
+    def _on_progress(self, key: str, downloaded: int, total: int) -> None:
+        if key == "engine":
+            bar, status = self.engine_progress, self.engine_status
+        else:
+            bar, status = self.voice_progress[key], self.voice_status[key]
+        if total > 0:
+            bar.setRange(0, total)
+            bar.setValue(downloaded)
+        status.setText(f"скачано {downloaded // (1024 * 1024)} МБ")
+
+    def _on_finished(self, key: str, error: str) -> None:
+        if key == "engine":
+            self.engine_progress.hide()
+            if error:
+                self.engine_status.setStyleSheet("color:#ff5c5c;")
+                self.engine_status.setText(f"ошибка: {error}")
+                self.engine_button.setEnabled(True)
+                return
+            logger.info("Движок Piper скачан")
+            self._refresh_engine_state()
+            return
+
         self.voice_progress[key].hide()
         if error:
             self.voice_status[key].setStyleSheet("color:#ff5c5c;")
             self.voice_status[key].setText(f"ошибка: {error}")
             self.voice_buttons[key].setEnabled(True)
             return
+        voice = self._voices_by_id[key]
         logger.info("Голос Piper '%s' скачан", key)
         self._refresh_voice_state(voice)
         if self.on_voices_loaded:
