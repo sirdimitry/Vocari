@@ -22,6 +22,7 @@ buffer — simpler, and plenty accurate for both use cases.
 from __future__ import annotations
 
 import io
+import sys
 import time
 from typing import Callable
 
@@ -39,22 +40,26 @@ RMS_WINDOW_SAMPLES = 1024
 MOUTH_RMS_THRESHOLD = 0.02
 
 # sounddevice/PortAudio's own "high" latency default (already the most
-# conservative built-in option) was not enough to keep this stutter-free -
-# confirmed via a loopback recording of actual playback output: with only
-# the library default, PipeWire logged constant "spa.alsa: front:0p:
-# follower ... resync" events (its ALSA output node repeatedly falling
-# behind its own target buffer and having to resync) and the recording
-# showed ~50ms dropouts roughly every 85ms during speech, on emulated
-# VirtualBox audio hardware. Explicitly requesting a bigger client-side
-# buffer than the library default gives PipeWire's ALSA follower enough
-# slack to absorb that hardware's timing jitter - a follow-up recording
-# with these values dropped the dropout count roughly 10x (189 -> 19 over
-# the same test phrase). Still not perfectly glitch-free on this hardware,
-# but the dominant, strictly-periodic stutter pattern is gone; the
-# remaining occasional short gaps look like genuine VM audio-clock jitter,
-# not something more buffering can fix.
-OUTPUT_LATENCY_S = 0.5
-OUTPUT_BLOCKSIZE = 4096
+# conservative built-in option) was not enough to keep this stutter-free on
+# Linux - confirmed via a loopback recording of actual playback output:
+# with only the library default, PipeWire logged constant "spa.alsa:
+# front:0p: follower ... resync" events (its ALSA output node repeatedly
+# falling behind its own target buffer and having to resync) and the
+# recording showed ~50ms dropouts roughly every 85ms during speech, on
+# emulated VirtualBox audio hardware. Explicitly requesting a bigger
+# client-side buffer than the library default gives PipeWire's ALSA
+# follower enough slack to absorb that hardware's timing jitter - a
+# follow-up recording with these values dropped the dropout count roughly
+# 10x (189 -> 19 over the same test phrase).
+#
+# Windows-only testing never showed this stutter (WASAPI/DirectSound
+# aren't starved by the library default the way PipeWire-on-emulated-audio
+# was), so the extra fixed delay before speech starts - a real, audible
+# half a second - isn't worth paying there for a problem that isn't
+# happening; None below means "let PortAudio pick", i.e. today's default,
+# unchanged Windows behavior.
+OUTPUT_LATENCY_S: float | None = 0.5 if sys.platform != "win32" else None
+OUTPUT_BLOCKSIZE = 4096 if sys.platform != "win32" else 0  # 0 = PortAudio's own default
 
 # Envelope follower for the bounce: raw RMS is noisy from sample to sample,
 # so it's smoothed toward a target level with different speeds depending on
