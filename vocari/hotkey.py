@@ -2,17 +2,19 @@
 has keyboard focus, not just when Vocari's own window is focused, since the
 whole point is skipping an unwanted TTS line mid-stream without alt-tabbing.
 
-Windows-only (uses RegisterHotKey via ctypes), matching the rest of the
-app's Windows-first scope. Deliberately avoids third-party global-hotkey
-libraries (e.g. `keyboard`/`pynput`) that hook every keystroke system-wide —
-RegisterHotKey is the standard OS-level API for exactly this ("bind one
-specific combo"), doesn't behave like a keylogger, and needs no extra
-dependency beyond the stdlib.
+Uses RegisterHotKey via ctypes on Windows — the standard OS-level API for
+exactly this ("bind one specific combo"), deliberately not a third-party
+global-hotkey library (e.g. `keyboard`/`pynput`) that hooks every keystroke
+system-wide like a keylogger would. On any other platform this degrades to a
+harmless no-op (see _IS_WINDOWS below): binding a hotkey just fails/logs
+instead of the app refusing to start, since ctypes.windll doesn't exist
+outside Windows at all - a real Linux backend (X11/evdev, or a portal-based
+one for Wayland) is still a separate piece of work, not yet built.
 """
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
+import sys
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence
@@ -30,11 +32,18 @@ MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 HOTKEY_ID = 1  # only one global hotkey exists right now, so a constant id is fine
 
-_user32 = ctypes.windll.user32
-_user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
-_user32.RegisterHotKey.restype = wintypes.BOOL
-_user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
-_user32.UnregisterHotKey.restype = wintypes.BOOL
+_IS_WINDOWS = sys.platform == "win32"
+
+if _IS_WINDOWS:
+    from ctypes import wintypes
+
+    _user32 = ctypes.windll.user32
+    _user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+    _user32.RegisterHotKey.restype = wintypes.BOOL
+    _user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.UnregisterHotKey.restype = wintypes.BOOL
+else:
+    _user32 = None
 
 # Qt.Key values line up numerically with Win32 virtual-key codes for these —
 # both ultimately trace back to the same US-keyboard/ASCII assumptions —
@@ -108,7 +117,10 @@ class _HotkeyNativeFilter(QAbstractNativeEventFilter):
         self._on_hotkey = on_hotkey
 
     def nativeEventFilter(self, event_type, message):  # noqa: N802 (Qt override)
-        if event_type == b"windows_generic_MSG":
+        # Qt only ever reports this exact event_type string on Windows, so
+        # this branch is naturally inert everywhere else - the _IS_WINDOWS
+        # check is just belt-and-suspenders against relying on that alone.
+        if _IS_WINDOWS and event_type == b"windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
             if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
                 self._on_hotkey()
