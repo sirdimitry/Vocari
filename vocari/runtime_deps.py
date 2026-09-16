@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import tarfile
 import time
 import urllib.request
 import zipfile
@@ -78,13 +79,23 @@ TORCH_CPU = RuntimeDep(
 )
 
 # Piper's own official release, used as-is (not re-hosted) - it's a public
-# GitHub repo, no auth needed, same as any other direct download. The zip's
-# own internal layout has everything under a top-level "piper/" folder,
-# hence PiperTTSProvider.ENGINE_DIR pointing at runtime_deps/piper_engine/piper.
+# GitHub repo, no auth needed, same as any other direct download. Every
+# platform's archive extracts to the same top-level "piper/" folder (verified
+# for both the Windows .zip and the Linux .tar.gz), hence
+# PiperTTSProvider.ENGINE_DIR pointing at runtime_deps/piper_engine/piper -
+# only the archive format and the binary's own filename differ (piper.exe vs
+# a plain "piper", see PiperTTSProvider.BINARY_NAME).
+if sys.platform == "win32":
+    _PIPER_ASSET = "piper_windows_amd64.zip"
+elif sys.platform == "darwin":
+    _PIPER_ASSET = "piper_macos_x64.tar.gz"
+else:
+    _PIPER_ASSET = "piper_linux_x86_64.tar.gz"
+
 PIPER_ENGINE = RuntimeDep(
     label="Piper (офлайн-голоса)",
     dir_name="piper_engine",
-    url="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
+    url=f"https://github.com/rhasspy/piper/releases/download/2023.11.14-2/{_PIPER_ASSET}",
     approx_size_mb=25,
     version=1,
 )
@@ -152,24 +163,27 @@ def ensure_all_on_path() -> None:
 
 def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
     """Blocking (network + disk I/O) — call from a background thread, not
-    the Qt main thread. Downloads the zip and extracts it into place;
-    `on_progress(downloaded_bytes, total_bytes)` is invoked periodically —
-    total_bytes is 0 if the server doesn't send a Content-Length, so callers
-    should treat that as "unknown" rather than divide by it."""
+    the Qt main thread. Downloads the archive and extracts it into place
+    (.zip or .tar.gz, by `dep.url`'s extension - see PIPER_ENGINE for why
+    that varies by platform); `on_progress(downloaded_bytes, total_bytes)`
+    is invoked periodically — total_bytes is 0 if the server doesn't send a
+    Content-Length, so callers should treat that as "unknown" rather than
+    divide by it."""
     target = _dep_path(dep)
     if target.exists():
         shutil.rmtree(target)
     RUNTIME_DEPS_DIR.mkdir(parents=True, exist_ok=True)
 
+    is_tar = dep.url.endswith(".tar.gz")
     logger.info("Скачивание %s: %s -> %s", dep.label, dep.url, target)
-    tmp_zip = RUNTIME_DEPS_DIR / f"{dep.dir_name}.download.zip"
+    tmp_archive = RUNTIME_DEPS_DIR / f"{dep.dir_name}.download{'.tar.gz' if is_tar else '.zip'}"
     progress = _throttled(on_progress)
     try:
         try:
             with urllib.request.urlopen(dep.url) as response:
                 total = int(response.headers.get("Content-Length", 0))
                 downloaded = 0
-                with open(tmp_zip, "wb") as f:
+                with open(tmp_archive, "wb") as f:
                     while True:
                         chunk = response.read(1024 * 256)
                         if not chunk:
@@ -180,15 +194,19 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
             logger.info("Скачано %s: %d байт (ожидалось %d)", dep.label, downloaded, total)
 
             target.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(tmp_zip) as zf:
-                zf.extractall(target)
+            if is_tar:
+                with tarfile.open(tmp_archive) as tf:
+                    tf.extractall(target)  # tar entries carry real Unix perms (exec bits included), unlike zip
+            else:
+                with zipfile.ZipFile(tmp_archive) as zf:
+                    zf.extractall(target)
             _marker(dep).write_text(str(dep.version), encoding="utf-8")
             logger.info("Распаковано и готово: %s", dep.label)
         except Exception:
             logger.exception("Не удалось скачать/распаковать %s (%s)", dep.label, dep.url)
             raise
     finally:
-        tmp_zip.unlink(missing_ok=True)
+        tmp_archive.unlink(missing_ok=True)
 
     ensure_on_path(dep)
 

@@ -30,18 +30,20 @@ from vocari.tts.piper_voices import PiperVoice
 
 logger = get_logger("tts.piper")
 
-# Piper's own release zip has everything under a top-level "piper/" folder
-# (see vocari/runtime_deps.py's PIPER_ENGINE) - ENGINE_DIR points one level
-# deeper than the download target itself to land inside it.
+# Piper's own release archive has everything under a top-level "piper/"
+# folder on every platform (see vocari/runtime_deps.py's PIPER_ENGINE) -
+# ENGINE_DIR points one level deeper than the download target itself to land
+# inside it. Only the binary's own filename differs per platform.
 ENGINE_DIR = app_root() / "runtime_deps" / "piper_engine" / "piper"
 VOICES_DIR = app_root() / "runtime_deps" / "piper_voices"
+BINARY_NAME = "piper.exe" if sys.platform == "win32" else "piper"
 
 PIPER_MISSING_HINT = 'откройте вкладку "Piper" в настройках и нажмите "Скачать движок Piper"'
 
 
 class PiperTTSProvider(TTSProvider):
     def is_engine_available(self) -> bool:
-        return (ENGINE_DIR / "piper.exe").exists()
+        return (ENGINE_DIR / BINARY_NAME).exists()
 
     def is_voice_available(self, voice_id: str) -> bool:
         return (VOICES_DIR / f"{voice_id}.onnx").exists()
@@ -70,8 +72,18 @@ class PiperTTSProvider(TTSProvider):
         return await asyncio.to_thread(self._synthesize_sync, text, voice)
 
     def _synthesize_sync(self, text: str, voice: str) -> SynthesisResult:
-        exe = ENGINE_DIR / "piper.exe"
+        exe = ENGINE_DIR / BINARY_NAME
         model_path = VOICES_DIR / f"{voice}.onnx"
+        if sys.platform != "win32":
+            # Belt-and-suspenders: the Linux/macOS tarball's own entries
+            # already carry the exec bit and tarfile.extractall() preserves
+            # it, but this makes synthesize() self-healing regardless (a
+            # manually-copied engine folder, an extraction edge case, ...)
+            # rather than failing with a bare "Permission denied".
+            try:
+                exe.chmod(exe.stat().st_mode | 0o111)
+            except OSError:
+                pass
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             out_path = Path(tmp.name)
         try:
