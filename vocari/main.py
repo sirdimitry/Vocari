@@ -1,6 +1,7 @@
 """Entry point: loads config + avatar model and shows the transparent overlay window."""
 from __future__ import annotations
 
+import faulthandler
 import signal
 import sys
 from pathlib import Path
@@ -106,6 +107,17 @@ def main() -> None:
     ensure_all_on_path()
 
     log_file = setup_logging(PROJECT_ROOT)
+
+    # A native crash (segfault, ...) skips sys.excepthook entirely - there's
+    # no Python exception to catch, so vocari.log stays silent about it too.
+    # faulthandler installs a low-level signal handler that dumps every
+    # thread's current Python-level call stack straight to a file the
+    # moment that happens, which is the difference between "no idea where"
+    # and "this exact line, this exact thread" when it does. The file is
+    # kept open for the process's lifetime (faulthandler needs the fd to
+    # still be valid at crash time, which could be arbitrarily late).
+    crash_log = open(log_file.parent / "crash.log", "a", encoding="utf-8")
+    faulthandler.enable(file=crash_log, all_threads=True)
 
     def _log_unhandled_exception(exc_type, exc_value, exc_tb) -> None:
         # This is a windowed app (no console) - without this hook, an
