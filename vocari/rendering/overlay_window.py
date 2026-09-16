@@ -12,8 +12,8 @@ import random
 from dataclasses import dataclass
 
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QRegion, QWheelEvent
+from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 from vocari.branding import app_icon
@@ -43,7 +43,6 @@ TWO_PI = 2 * math.pi
 SWAY_ROTATION_DEG = 11.0
 SWAY_PERIOD_S = 1.8
 SWAY_PHASE_STEP = TWO_PI * ANIMATION_INTERVAL_MS / 1000 / SWAY_PERIOD_S
-_CLICK_MASK_PADDING = 0.25  # fraction of an instance's own w/h added on every side - see _update_click_mask()
 BOUNCE_AMPLITUDE_PX = 16.0  # vertical hop at bounce_level == 1.0 (loudest)
 IDLE_BOB_AMPLITUDE_PX = 4.0  # subtle breathing-like bob, applied to every instance on stage
 IDLE_BOB_PERIOD_S = 2.4
@@ -651,12 +650,9 @@ class OverlayWindow(QWidget):
         finally:
             painter.end()
 
-        self._update_click_mask(stage_w, stage_h, left_margin, headroom, canvas_w, canvas_h)
+        self._update_click_transparency()
 
-    def _update_click_mask(
-        self, stage_w: float, stage_h: float, left_margin: float, headroom: float,
-        canvas_w: int, canvas_h: int,
-    ) -> None:
+    def _update_click_transparency(self) -> None:
         """Without this, the *whole* window rectangle would swallow every
         click/drag anywhere within it - including its empty, invisible
         corridor and queue slots, which is most of it (the window is sized
@@ -664,38 +660,29 @@ class OverlayWindow(QWidget):
         That's harmless when nothing else happens to sit under that
         rectangle, but with WindowStaysOnTopHint it's *always* on top of
         everything at that screen position - including, if the avatar is
-        placed or sized such that its corridor reaches there, other
-        windows or even the desktop's own taskbar/tray. A mask restricts
-        which parts of this window actually receive input (and are drawn -
-        setMask() clips both) at the OS/window-manager level to just where
-        an avatar is really standing right now - a plain per-instance
-        bounding box, not a true per-pixel shape (which would need
-        re-deriving from every layer's actual alpha each frame) - simple,
-        cheap for the handful of instances that can ever be on stage, and
-        enough to stop empty stage area from blocking clicks meant for
-        whatever's behind it. Padded generously beyond the nominal canvas
-        box (see _CLICK_MASK_PADDING) since painting itself moves pixels
-        outside it - the bounce hop, idle bob, and swaying layers (ahoge,
-        ears, ...) all animate past the canvas's own nominal edges; without
-        slack here the mask would visibly clip them mid-motion, not just
-        make that sliver unclickable."""
-        if not self.width() or not self.height() or not stage_w or not stage_h:
-            self.clearMask()
-            return
-        sx = self.width() / stage_w
-        sy = self.height() / stage_h
+        placed or sized such that its corridor reaches there, other windows
+        or even the desktop's own taskbar/tray; reported as "nothing on the
+        whole desktop is clickable, not even the tray icon" while idle on a
+        small screen.
 
-        region = QRegion()
-        for inst in self.stage.instances:
-            slot_scale = self.stage.slot_scale(inst.slot)
-            x = left_margin + self.stage.draw_origin_x + inst.x_offset + canvas_w * (1 - slot_scale) / 2
-            y = headroom + canvas_h * (1 - slot_scale)
-            w = canvas_w * slot_scale
-            h = canvas_h * slot_scale
-            pad_x, pad_y = w * _CLICK_MASK_PADDING, h * _CLICK_MASK_PADDING
-            x, y, w, h = x - pad_x, y - pad_y, w + 2 * pad_x, h + 2 * pad_y
-            region += QRect(round(x * sx), round(y * sy), max(1, round(w * sx)), max(1, round(h * sy)))
-        self.setMask(region)
+        A first attempt used setMask() to a padded per-instance bounding
+        box, recomputed every frame - correct in principle, but on real X11
+        (unlike this codebase's Windows-only testing so far) combining a
+        per-frame shape mask with WA_TranslucentBackground made the avatar
+        itself render invisible, and the frequent native mask updates were
+        a plausible source of the choppy audio also reported around the
+        same time. This is deliberately far simpler: while the stage is
+        completely empty (nothing visible - the overwhelming majority of
+        the time), the whole window is just made transparent to mouse
+        input; the moment anything is on stage, input goes back to normal
+        (the full rect stays interactive, exactly as it always has -
+        dragging the currently-speaking avatar keeps working). It doesn't
+        fix clicks landing in the empty corridor *while* something is
+        speaking, but that's a much smaller window in practice than "any
+        time nobody has said anything recently"."""
+        should_be_transparent = not self.stage.instances
+        if should_be_transparent != self.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents):
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, should_be_transparent)
 
     def _paint_bubble(self, painter: QPainter, inst: AvatarInstance, canvas_w: int, canvas_h: int) -> None:
         config = self.bubble_config
