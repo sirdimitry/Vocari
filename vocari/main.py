@@ -193,7 +193,6 @@ def main() -> None:
     window.set_model_weights(config.overlay.model_weights)
     window.set_user_model_bindings(config.overlay.user_model_bindings)
     logger.info("Доступные модели: %s", ", ".join(m.name for m in available) or "—")
-    window.show()
 
     def on_model_selected(model_path: str) -> None:
         try:
@@ -325,6 +324,19 @@ def main() -> None:
         config.save()
 
     app.aboutToQuit.connect(on_quit)
+
+    # Deliberately the last thing before the event loop starts: showing the
+    # overlay any earlier maps a huge always-on-top, focused window (it
+    # covers close to the whole virtual desktop, see _apply_geometry())
+    # while the rest of this function still runs synchronously (TTS
+    # providers, the Twitch bot, Settings, the tray...) - the event loop
+    # that lets Qt/X11 actually apply the window's click-through state
+    # isn't pumping yet, so every click anywhere on the desktop lands on
+    # the still fully-opaque-to-input window and gets swallowed until
+    # something (observed: an Esc keypress) forces it to catch up. Showing
+    # the window right before app.exec() instead means the event loop is
+    # already spinning by the time anything is on screen to click.
+    window.show()
 
     sys.exit(app.exec())
 
