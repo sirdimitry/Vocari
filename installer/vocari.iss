@@ -68,7 +68,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\Vocari\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; A local smoke test may create user-specific runtime state inside dist.
+; Never ship settings, tokens, logs, caches, or downloaded dependencies.
+Source: "..\dist\Vocari\*"; DestDir: "{app}"; Excludes: "config.json,config.json.bak,.config.json.*.tmp,.config.json.bak.*.tmp,logs\*,silero_cache\*,runtime_deps\*"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist
 
 [Icons]
