@@ -16,7 +16,8 @@ jobs:
       - name: Install Arch build and runtime dependencies
         run: >-
           pacman -Syu --noconfirm --needed git base-devel python python-pip
-          portaudio libsndfile libx11 libxext libxcb xcb-util-cursor xorg-xwayland
+          portaudio libsndfile libx11 libxext libxcb libxkbcommon
+          xcb-util-cursor xorg-xwayland
 
       - uses: actions/checkout@v4
 
