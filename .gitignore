@@ -5,6 +5,7 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.venv-endeavouros-build/
 
 # Runtime-generated, machine-specific
 config.json

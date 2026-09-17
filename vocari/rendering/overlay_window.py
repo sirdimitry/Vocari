@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QImage, QMouseEvent, QPainter, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 from vocari.branding import app_icon
@@ -25,6 +25,10 @@ from vocari.rendering.model import AvatarModel, EffectSpec, SwaySpec
 from vocari.rendering.stage import AvatarInstance, Stage
 
 logger = get_logger("overlay")
+
+
+def _is_x11() -> bool:
+    return sys.platform.startswith("linux") and QGuiApplication.platformName().lower() == "xcb"
 
 MIN_SCALE = 0.1
 MAX_SCALE = 5.0
@@ -265,6 +269,10 @@ class OverlayWindow(QWidget):
         # the app. A plain frameless window shows up in the list (and in the
         # taskbar/alt-tab, which is also how the user finds it again).
         base_flags = Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+        if sys.platform != "win32":
+            # Compositor-level click-through for Wayland and platforms where
+            # WA_TransparentForMouseEvents only affects Qt's own dispatch.
+            base_flags |= Qt.WindowType.WindowTransparentForInput
         self.setWindowFlags(
             base_flags | Qt.WindowType.WindowStaysOnTopHint
             if render_config.always_on_top
@@ -290,7 +298,7 @@ class OverlayWindow(QWidget):
         self._supports_click_toggle = sys.platform == "win32"
         if not self._supports_click_toggle:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            if sys.platform.startswith("linux"):
+            if _is_x11():
                 # winId() forces the native (X11) window handle to exist
                 # right now instead of lazily at show() time, so the input
                 # shape is already in place before the window is ever
@@ -404,7 +412,7 @@ class OverlayWindow(QWidget):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
         if was_visible:
             self.show()  # Qt requires re-showing after a window flag change
-        if not self._supports_click_toggle and sys.platform.startswith("linux"):
+        if not self._supports_click_toggle and _is_x11():
             # A window-flag change can recreate the underlying X11 window,
             # which would silently drop whatever input shape was set on the
             # old one - reapply unconditionally rather than assume either way.

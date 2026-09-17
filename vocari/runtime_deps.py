@@ -89,6 +89,7 @@ TORCH_CPU = RuntimeDep(
     sha256="63ba526ca47744cb51891e180f15dce77d77017b4710e5724a9c9353bb0c1d0f",
     version=2,  # v2: bundles the full stdlib + omegaconf's deps too - v1 was missing timeit/xml.etree/omegaconf etc.
 )
+TORCH_RUNTIME_DOWNLOAD_SUPPORTED = sys.platform == "win32"
 
 # Piper's own official release, used as-is (not re-hosted) - it's a public
 # GitHub repo, no auth needed, same as any other direct download. Every
@@ -165,6 +166,8 @@ def ensure_on_path(dep: RuntimeDep) -> None:
     for free: a plain `import torch` after this succeeds exactly when it's
     genuinely available, in a dev venv (already on sys.path the normal way)
     or a packaged build (downloaded previously, picked up here) alike."""
+    if dep is TORCH_CPU and not TORCH_RUNTIME_DOWNLOAD_SUPPORTED:
+        return
     if not is_downloaded(dep):
         return
     path = str(_dep_path(dep))
@@ -189,6 +192,8 @@ def download(
     is invoked periodically — total_bytes is 0 if the server doesn't send a
     Content-Length, so callers should treat that as "unknown" rather than
     divide by it."""
+    if dep is TORCH_CPU and not TORCH_RUNTIME_DOWNLOAD_SUPPORTED:
+        raise RuntimeError("Автоматическая загрузка PyTorch не поддерживается на этой платформе")
     target = _dep_path(dep)
     # Only an immediate child of our dependency directory can be replaced.
     if target.is_symlink() or target.resolve().parent != RUNTIME_DEPS_DIR.resolve():

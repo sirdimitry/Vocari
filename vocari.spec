@@ -18,6 +18,8 @@
 # created fresh next to whatever copy of Vocari.exe is running (never
 # inside the build itself).
 
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
@@ -96,7 +98,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon='assets/branding/icon.ico',
+    icon='assets/branding/icon.ico' if sys.platform == 'win32' else None,
 )
 
 coll = COLLECT(

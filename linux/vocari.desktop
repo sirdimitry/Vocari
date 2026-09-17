@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vocari
+Comment=Chat-controlled talking avatar overlay
+Comment[ru]=Говорящий аватар-оверлей, управляемый чатом
+Exec=vocari
+Icon=vocari
+Terminal=false
+Categories=AudioVideo;Utility;
+StartupNotify=false

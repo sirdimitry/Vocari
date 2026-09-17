@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# KDE Plasma on EndeavourOS defaults to Wayland. Vocari deliberately uses
+# XWayland there because X11 provides reliable transparent window capture,
+# click-through input shaping, and one-key global grabs. Set
+# VOCARI_NATIVE_WAYLAND=1 to opt into Qt's native Wayland backend.
+if [[ "${XDG_SESSION_TYPE:-}" == "wayland" && "${VOCARI_NATIVE_WAYLAND:-0}" != "1" ]]; then
+    export QT_QPA_PLATFORM=xcb
+fi
+
+exec /opt/vocari/Vocari "$@"

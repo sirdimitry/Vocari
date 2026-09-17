@@ -2,19 +2,19 @@
 has keyboard focus, not just when Vocari's own window is focused, since the
 whole point is skipping an unwanted TTS line mid-stream without alt-tabbing.
 
-Uses RegisterHotKey via ctypes on Windows — the standard OS-level API for
-exactly this ("bind one specific combo"), deliberately not a third-party
-global-hotkey library (e.g. `keyboard`/`pynput`) that hooks every keystroke
-system-wide like a keylogger would. On any other platform this degrades to a
-harmless no-op (see _IS_WINDOWS below): binding a hotkey just fails/logs
-instead of the app refusing to start, since ctypes.windll doesn't exist
-outside Windows at all - a real Linux backend (X11/evdev, or a portal-based
-one for Wayland) is still a separate piece of work, not yet built.
+Uses RegisterHotKey on Windows and a single XGrabKey registration on Linux
+X11/XWayland. Neither backend hooks or records general keyboard input.
+Native Wayland does not expose a compositor-independent global-shortcut API;
+the EndeavourOS launcher therefore selects Qt's XWayland backend so the same
+hotkey and click-through behavior work consistently under KDE Wayland too.
 """
 from __future__ import annotations
 
 import ctypes
+import os
+import select
 import sys
+import threading
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence
@@ -33,6 +33,7 @@ MOD_NOREPEAT = 0x4000
 HOTKEY_ID = 1  # only one global hotkey exists right now, so a constant id is fine
 
 _IS_WINDOWS = sys.platform == "win32"
+_IS_LINUX = sys.platform.startswith("linux")
 
 if _IS_WINDOWS:
     from ctypes import wintypes
@@ -127,6 +128,141 @@ class _HotkeyNativeFilter(QAbstractNativeEventFilter):
         return False, 0
 
 
+class _X11Hotkey:
+    """One passive X11 key grab, watched on a small daemon thread."""
+
+    def __init__(self, callback):
+        self._callback = callback
+        self._display = None
+        self._root = None
+        self._keycode = 0
+        self._modifiers = 0
+        self._grab_modifiers: list[int] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _parse(sequence_text: str):
+        try:
+            from Xlib import X, XK
+        except ImportError:
+            return None
+        sequence = QKeySequence(sequence_text)
+        if sequence.count() == 0:
+            return None
+        combination = sequence[0]
+        key = int(combination.key())
+        if Qt.Key.Key_A <= key <= Qt.Key.Key_Z or Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            key_name = chr(key)
+        elif Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
+            key_name = f"F{key - Qt.Key.Key_F1 + 1}"
+        else:
+            key_name = {
+                Qt.Key.Key_Escape: "Escape", Qt.Key.Key_Tab: "Tab",
+                Qt.Key.Key_Backspace: "BackSpace", Qt.Key.Key_Return: "Return",
+                Qt.Key.Key_Enter: "KP_Enter", Qt.Key.Key_Space: "space",
+                Qt.Key.Key_Insert: "Insert", Qt.Key.Key_Delete: "Delete",
+                Qt.Key.Key_Home: "Home", Qt.Key.Key_End: "End",
+                Qt.Key.Key_PageUp: "Prior", Qt.Key.Key_PageDown: "Next",
+                Qt.Key.Key_Left: "Left", Qt.Key.Key_Up: "Up",
+                Qt.Key.Key_Right: "Right", Qt.Key.Key_Down: "Down",
+                Qt.Key.Key_Pause: "Pause",
+            }.get(Qt.Key(key))
+        if not key_name:
+            return None
+        keysym = XK.string_to_keysym(key_name)
+        if not keysym:
+            return None
+        qt_mods = combination.keyboardModifiers()
+        modifiers = 0
+        if qt_mods & Qt.KeyboardModifier.ControlModifier:
+            modifiers |= X.ControlMask
+        if qt_mods & Qt.KeyboardModifier.AltModifier:
+            modifiers |= X.Mod1Mask
+        if qt_mods & Qt.KeyboardModifier.ShiftModifier:
+            modifiers |= X.ShiftMask
+        if qt_mods & Qt.KeyboardModifier.MetaModifier:
+            modifiers |= X.Mod4Mask
+        return keysym, modifiers
+
+    def register(self, sequence_text: str) -> bool:
+        self.unregister()
+        parsed = self._parse(sequence_text)
+        if parsed is None or not os.environ.get("DISPLAY"):
+            return False
+        try:
+            from Xlib import X, display
+
+            self._display = display.Display()
+            self._root = self._display.screen().root
+            self._keycode = self._display.keysym_to_keycode(parsed[0])
+            self._modifiers = parsed[1]
+            if not self._keycode:
+                self.unregister()
+                return False
+            # CapsLock/NumLock must not make the hotkey mysteriously stop.
+            self._grab_modifiers = [
+                self._modifiers,
+                self._modifiers | X.LockMask,
+                self._modifiers | X.Mod2Mask,
+                self._modifiers | X.LockMask | X.Mod2Mask,
+            ]
+            errors = []
+            self._display.set_error_handler(lambda error, _request: errors.append(error))
+            for modifiers in self._grab_modifiers:
+                self._root.grab_key(
+                    self._keycode, modifiers, True, X.GrabModeAsync, X.GrabModeAsync
+                )
+            self._display.sync()
+            if errors:
+                self.unregister()
+                return False
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="vocari-x11-hotkey", daemon=True)
+            self._thread.start()
+            return True
+        except Exception:
+            logger.exception("Не удалось зарегистрировать глобальный хоткей через X11")
+            self.unregister()
+            return False
+
+    def _run(self) -> None:
+        try:
+            from Xlib import X
+
+            while not self._stop.is_set() and self._display is not None:
+                ready, _, _ = select.select([self._display.fileno()], [], [], 0.2)
+                if not ready:
+                    continue
+                while self._display.pending_events():
+                    event = self._display.next_event()
+                    if event.type == X.KeyPress and event.detail == self._keycode:
+                        self._callback()
+        except Exception:
+            if not self._stop.is_set():
+                logger.exception("Ошибка обработчика глобального хоткея X11")
+
+    def unregister(self) -> None:
+        self._stop.set()
+        if self._display is not None and self._root is not None:
+            try:
+                for modifiers in self._grab_modifiers:
+                    self._root.ungrab_key(self._keycode, modifiers)
+                self._display.sync()
+            except Exception:
+                pass
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+        if self._display is not None:
+            try:
+                self._display.close()
+            except Exception:
+                pass
+        self._display = self._root = self._thread = None
+        self._grab_modifiers = []
+
+
 class GlobalHotkeyManager(QObject):
     """Wraps RegisterHotKey/UnregisterHotKey + a native event filter that
     catches the resulting WM_HOTKEY message regardless of which window (if
@@ -138,6 +274,7 @@ class GlobalHotkeyManager(QObject):
         super().__init__()
         self._app = app
         self._registered = False
+        self._x11 = _X11Hotkey(self.triggered.emit) if _IS_LINUX else None
         self._filter = _HotkeyNativeFilter(self.triggered.emit)
         app.installNativeEventFilter(self._filter)
 
@@ -149,6 +286,20 @@ class GlobalHotkeyManager(QObject):
         running application — the caller should surface that to the user
         rather than fail silently."""
         self._unregister()
+        if not sequence_text:
+            return True
+        if self._x11 is not None:
+            ok = self._x11.register(sequence_text)
+            self._registered = ok
+            if not ok:
+                logger.warning(
+                    "Не удалось зарегистрировать хоткей '%s' через X11/XWayland",
+                    sequence_text,
+                )
+            return ok
+        if not _IS_WINDOWS:
+            logger.warning("Глобальные хоткеи на этой платформе не поддерживаются")
+            return False
         parsed = qt_sequence_to_win32(sequence_text)
         if parsed is None:
             return sequence_text == ""
@@ -163,8 +314,11 @@ class GlobalHotkeyManager(QObject):
         return ok
 
     def _unregister(self) -> None:
+        if self._x11 is not None:
+            self._x11.unregister()
         if self._registered:
-            _user32.UnregisterHotKey(None, HOTKEY_ID)
+            if _IS_WINDOWS:
+                _user32.UnregisterHotKey(None, HOTKEY_ID)
             self._registered = False
 
     def shutdown(self) -> None:

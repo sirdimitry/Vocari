@@ -1,0 +1,53 @@
+name: EndeavourOS package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [linux-support]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install Arch build and runtime dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed git base-devel python python-pip
+          portaudio libsndfile libx11 libxext libxcb xcb-util-cursor xorg-xwayland
+
+      - uses: actions/checkout@v4
+
+      - name: Build EndeavourOS package
+        shell: bash
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- bash -lc "cd '$GITHUB_WORKSPACE' && bash linux/build_endeavouros.sh"
+
+      - name: Run test suite on Arch
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: .venv-endeavouros-build/bin/python -B -m unittest discover -s tests -q
+
+      - name: Install and smoke-test package
+        shell: bash
+        run: |
+          pacman -U --noconfirm dist/linux/vocari-bin-*.pkg.tar.zst
+          set +e
+          timeout 8s env QT_QPA_PLATFORM=offscreen XDG_DATA_HOME=/tmp/vocari-data vocari
+          status=$?
+          set -e
+          if [[ $status -ne 124 ]]; then
+            echo "Vocari exited unexpectedly with status $status" >&2
+            exit 1
+          fi
+          test -f /tmp/vocari-data/vocari/assets/models/Ariral/model.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vocari-EndeavourOS-x86_64
+          path: dist/linux/*.pkg.tar.zst
+          if-no-files-found: error

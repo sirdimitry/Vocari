@@ -1,6 +1,7 @@
 """Settings -> "Рендер": window/OBS capture options + the sway/bounce toggle."""
 from __future__ import annotations
 
+import sys
 from typing import Callable
 
 from PySide6.QtWidgets import (
@@ -48,12 +49,21 @@ class RenderTab(QWidget):
         top_row.addWidget(self.always_on_top_toggle)
         layout.addLayout(top_row)
 
-        obs_note = QLabel(
-            "Как захватить в OBS: источник «Захват окна» → окно «Vocari - …» → "
-            "в поле «Метод захвата» обязательно выбрать «Windows 10 (1903 и новее)». "
-            "Метод BitBlt (и часто «Автоматически») не умеет захватывать окна с "
-            "прозрачностью — источник будет пустым."
-        )
+        if sys.platform.startswith("linux"):
+            obs_text = (
+                "В EndeavourOS выберите в OBS «Захват окна (Xcomposite)» → "
+                "«Vocari - …». Штатный запуск использует XWayland для надёжной "
+                "прозрачности, click-through и глобального хоткея. Если Vocari "
+                "запущен нативно в Wayland, используйте захват экрана/окна через PipeWire."
+            )
+        else:
+            obs_text = (
+                "Как захватить в OBS: источник «Захват окна» → окно «Vocari - …» → "
+                "в поле «Метод захвата» обязательно выбрать «Windows 10 (1903 и новее)». "
+                "Метод BitBlt (и часто «Автоматически») не умеет захватывать окна с "
+                "прозрачностью — источник будет пустым."
+            )
+        obs_note = QLabel(obs_text)
         obs_note.setWordWrap(True)
         obs_note.setStyleSheet("color: #e6c229; font-size: 11px;")
         layout.addWidget(obs_note)
@@ -113,10 +123,10 @@ class RenderTab(QWidget):
         layout.addWidget(self.hotkey_status_label)
 
         hotkey_note = QLabel(
-            "Работает глобально — даже когда фокус на игре или другом окне, не "
-            "только когда открыты настройки Vocari. По нажатию текущая фраза "
-            "обрывается на полуслове, аватар зеркалится и упрыгивает — как будто "
-            "договорил."
+            "Работает глобально — даже когда фокус на игре или другом окне. "
+            + ("В Linux требуется запуск через X11/XWayland. " if sys.platform.startswith("linux") else "")
+            + "По нажатию текущая фраза обрывается на полуслове, аватар зеркалится "
+            "и упрыгивает — как будто договорил."
         )
         hotkey_note.setWordWrap(True)
         hotkey_note.setStyleSheet("color: gray; font-size: 11px;")

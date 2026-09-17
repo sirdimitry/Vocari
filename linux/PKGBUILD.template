@@ -1,0 +1,31 @@
+pkgname=vocari-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Chat-controlled talking avatar overlay'
+arch=('x86_64')
+url='https://github.com/sirdimitry/Vocari'
+license=('custom')
+depends=('glibc' 'libx11' 'libxext' 'libxcb' 'xcb-util-cursor' 'portaudio' 'libsndfile' 'xorg-xwayland')
+optdepends=('obs-studio: capture the avatar overlay')
+provides=('vocari')
+conflicts=('vocari')
+options=('!strip')
+source=(
+  "Vocari-${pkgver}-linux-x86_64.tar.gz"
+  'vocari'
+  'vocari.desktop'
+)
+sha256sums=(
+  '@ARCHIVE_SHA256@'
+  '@LAUNCHER_SHA256@'
+  '@DESKTOP_SHA256@'
+)
+
+package() {
+  install -d "$pkgdir/opt/vocari"
+  cp -a "$srcdir/Vocari/." "$pkgdir/opt/vocari/"
+  install -Dm755 "$srcdir/vocari" "$pkgdir/usr/bin/vocari"
+  install -Dm644 "$srcdir/vocari.desktop" "$pkgdir/usr/share/applications/vocari.desktop"
+  install -Dm644 "$srcdir/Vocari/assets/branding/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/vocari.png"
+}

@@ -3,6 +3,7 @@ stores these and walks the user through getting a token — the bot itself
 connects and applies them in Stage 5."""
 from __future__ import annotations
 
+import sys
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -99,11 +100,14 @@ class TwitchTab(QWidget):
         self.token_format_hint.hide()
         layout.addWidget(self.token_format_hint)
 
+        encryption = (
+            "Windows DPAPI"
+            if sys.platform == "win32"
+            else "локальным ключом с правами доступа только для текущего пользователя"
+        )
         privacy_hint = QLabel(
-            "Токен хранится только локально, в config.json на этом компьютере — "
-            "этот файл не попадает в git (он в .gitignore) и зашифрован средствами "
-            "Windows, так что вручную его не открыть и не отредактировать. "
-            "Не публикуйте токен нигде."
+            "Токен хранится только локально в зашифрованном config.json на этом "
+            f"компьютере ({encryption}). Не публикуйте токен нигде."
         )
         privacy_hint.setWordWrap(True)
         privacy_hint.setStyleSheet("color: gray; font-size: 11px;")

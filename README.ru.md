@@ -19,6 +19,22 @@
 
 Хотите запускать из исходников или собирать сами — смотрите раздел «Для разработки» ниже.
 
+### EndeavourOS / Arch Linux
+
+Для EndeavourOS собирается нативный пакет pacman:
+
+```bash
+sudo pacman -S --needed base-devel python python-pip portaudio libsndfile libx11 libxext libxcb xcb-util-cursor xorg-xwayland
+bash linux/build_endeavouros.sh
+sudo pacman -U dist/linux/vocari-bin-*-x86_64.pkg.tar.zst
+```
+
+Пакет ставит приложение в `/opt/vocari`, команду `vocari` — в `/usr/bin`, а пункт меню — в категорию «Аудио и видео». Настройки, модели и загруженные голоса хранятся в `$XDG_DATA_HOME/vocari` (обычно `~/.local/share/vocari`), поэтому системная папка приложения остаётся только для чтения.
+
+В KDE Plasma Wayland команда `vocari` автоматически использует XWayland: так надёжнее работают прозрачность, пропуск кликов, глобальный хоткей и «Захват окна (Xcomposite)» в OBS. Нативный Wayland можно включить через `VOCARI_NATIVE_WAYLAND=1 vocari`; тогда для OBS используйте захват через PipeWire, а глобальный хоткей может быть недоступен из-за ограничений Wayland.
+
+Edge TTS и Piper поддерживаются в готовой Linux-сборке. Автоматическая загрузка PyTorch для Silero пока доступна только в Windows; при запуске из исходников Silero работает, если PyTorch заранее установлен в том же Python-окружении.
+
 ## Как пользоваться
 
 - Перетаскивание окна: зажать левую кнопку мыши и тащить аватар (не левый край окна — окно шире, чем видимый персонаж, см. ниже про OBS).
@@ -166,6 +182,7 @@ vocari.spec   — конфигурация PyInstaller
 installer/
   vocari.iss          — скрипт Inno Setup (см. "Сборка установщика")
   build_installer.py  — подставляет версию и вызывает компилятор Inno Setup
+linux/             — сборщик pacman-пакета, launcher X11/XWayland и desktop-файл для EndeavourOS/Arch
 ```
 
 ## Совместимость с разным железом

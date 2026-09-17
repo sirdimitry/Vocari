@@ -25,7 +25,13 @@ from PySide6.QtWidgets import (
 )
 
 from vocari.logging_setup import get_logger
-from vocari.runtime_deps import DownloadCancelled, TORCH_CPU, download, ensure_on_path
+from vocari.runtime_deps import (
+    DownloadCancelled,
+    TORCH_CPU,
+    TORCH_RUNTIME_DOWNLOAD_SUPPORTED,
+    download,
+    ensure_on_path,
+)
 from vocari.tts.silero_provider import SileroTTSProvider
 
 logger = get_logger("tts.silero_tab")
@@ -108,8 +114,22 @@ class SileroTab(QWidget):
 
         if _torch_available():
             self._build_preload_ui()
+        elif not TORCH_RUNTIME_DOWNLOAD_SUPPORTED:
+            self._build_linux_info_ui()
         else:
             self._build_torch_download_ui()
+
+    def _build_linux_info_ui(self) -> None:
+        note = QLabel(
+            "Автоматическая загрузка PyTorch сейчас доступна только в Windows. "
+            "В сборке для EndeavourOS используйте Edge TTS или Piper. При запуске "
+            "Vocari из исходников Silero появится автоматически, если установить "
+            "PyTorch в то же Python-окружение до запуска приложения."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray; font-size: 11px;")
+        self.layout_.addWidget(note)
+        self.layout_.addStretch()
 
     # -- normal mode: torch already available --------------------------------
 
