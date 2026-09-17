@@ -97,8 +97,10 @@ class SettingsWindow(QWidget):
         tabs.addTab(self._wrap(self.tts_tab), "TTS")
         silero_provider = tts_providers["silero"]
         assert isinstance(silero_provider, SileroTTSProvider)
-        tabs.addTab(self._wrap(SileroTab(silero_provider, self.tts_tab.set_silero_voices)), "Silero")
-        tabs.addTab(self._wrap(PiperTab(self.tts_tab.set_piper_voices)), "Piper")
+        self.silero_tab = SileroTab(silero_provider, self.tts_tab.set_silero_voices)
+        tabs.addTab(self._wrap(self.silero_tab), "Silero")
+        self.piper_tab = PiperTab(self.tts_tab.set_piper_voices)
+        tabs.addTab(self._wrap(self.piper_tab), "Piper")
         tabs.addTab(self._wrap(TwitchTab(config, twitch_bot_controller)), "Twitch")
 
         layout = QVBoxLayout(self)
@@ -130,3 +132,7 @@ class SettingsWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         event.ignore()
         self.hide()
+
+    def shutdown_background_tasks(self) -> None:
+        self.silero_tab.shutdown()
+        self.piper_tab.shutdown()

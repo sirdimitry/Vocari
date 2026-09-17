@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Property, QEvent, QObject, QPropertyAnimation, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QColor, QKeyEvent, QKeySequence, QPainter, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QAbstractButton, QComboBox, QPushButton, QStyledItemDelegate, QWidget
 
 _OFF_COLOR = QColor("#b7b7c0")
@@ -14,10 +14,12 @@ _ON_COLOR = QColor("#6c5ce7")
 class ToggleSwitch(QAbstractButton):
     """A small animated on/off toggle switch (the "тумблер" for settings)."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, accessible_name: str = "", parent: QWidget | None = None):
         super().__init__(parent)
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(accessible_name)
         self.setFixedSize(44, 24)
 
         self._knob_position = 0.0
@@ -58,6 +60,18 @@ class ToggleSwitch(QAbstractButton):
         knob_x = 2 + mix * (self.width() - knob_diameter - 4)
         painter.setBrush(QColor("white"))
         painter.drawEllipse(QRectF(knob_x, 2, knob_diameter, knob_diameter))
+
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#ffffff"), 2, Qt.PenStyle.DotLine))
+            painter.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 11, 11)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 _DELETABLE_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -133,14 +147,11 @@ class CheckableModelCombo(QComboBox):
         ]
 
     def set_checked_names(self, names: list[str]) -> None:
-        """Checks exactly the given names (by item text); empty means "check
-        everything" — matching OverlayConfig.random_pool's own empty-means-
-        everyone-eligible convention, so the boxes shown here always agree
-        with what the app will actually do."""
+        """Checks exactly the given names (by item text)."""
         pool = set(names)
         for i in range(self._store.rowCount()):
             item = self._store.item(i)
-            checked = not names or item.text() in pool
+            checked = item.text() in pool
             item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
 
     def eventFilter(self, obj: QObject, event) -> bool:  # noqa: N802

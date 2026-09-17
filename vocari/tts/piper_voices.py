@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
+_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/8914c16824264dfe6425deffca679ce9bb1ab371"
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,8 @@ class PiperVoice:
     lang: str  # "ru" | "en"
     label: str  # shown in the UI
     approx_size_mb: int
+    onnx_sha256: str
+    config_sha256: str
 
     @property
     def onnx_url(self) -> str:
@@ -35,8 +37,16 @@ class PiperVoice:
 
 
 PIPER_VOICES = [
-    PiperVoice("ru_RU-irina-medium", "ru", "Ирина (RU, женский)", 63),
-    PiperVoice("ru_RU-denis-medium", "ru", "Денис (RU, мужской)", 63),
-    PiperVoice("en_US-lessac-medium", "en", "Lessac (EN, мужской)", 63),
-    PiperVoice("en_US-amy-medium", "en", "Amy (EN, женский)", 63),
+    PiperVoice("ru_RU-irina-medium", "ru", "Ирина (RU, женский)", 63,
+               "8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa",
+               "c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7"),
+    PiperVoice("ru_RU-denis-medium", "ru", "Денис (RU, мужской)", 63,
+               "15fab56e11a097858ee115545d0f697fc2a316c41a291a5362349fb870411b0a",
+               "831c860dac0b5073eaa81610a0a638ec23d90a6cf8e5f871b4485c2cec3767c8"),
+    PiperVoice("en_US-lessac-medium", "en", "Lessac (EN, мужской)", 63,
+               "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",
+               "efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0"),
+    PiperVoice("en_US-amy-medium", "en", "Amy (EN, женский)", 63,
+               "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18",
+               "95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77"),
 ]

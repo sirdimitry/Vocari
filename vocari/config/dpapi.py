@@ -58,8 +58,7 @@ def protect(data: bytes) -> bytes:
 
             return Fernet(_get_or_create_key()).encrypt(data)
         except ImportError:
-            logger.warning("Модуль 'cryptography' не установлен — config.json будет сохранён как обычный JSON")
-            return data
+            raise OSError("Для шифрования настроек требуется модуль cryptography") from None
     blob_in = _to_blob(data)
     blob_out = _DATA_BLOB()
     ok = ctypes.windll.crypt32.CryptProtectData(

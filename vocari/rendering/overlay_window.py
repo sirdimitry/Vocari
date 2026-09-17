@@ -40,6 +40,7 @@ BLINK_CLOSED_DURATION_MS = 150
 # louder/sharper audio pushes the whole avatar further, quiet passages let it
 # settle back down. Both are gated by the "Покачивание" toggle in settings.
 ANIMATION_INTERVAL_MS = 33  # ~30 FPS, matches the spec's render timer cap
+MAX_CACHED_MODEL_PACKS = 3  # active/on-stage models are protected above this cap
 TWO_PI = 2 * math.pi
 SWAY_ROTATION_DEG = 11.0
 SWAY_PERIOD_S = 1.8
@@ -131,9 +132,8 @@ def _effect_offset(spec: EffectSpec, t: float) -> tuple[float, float]:
 @dataclass
 class ModelPack:
     """Everything needed to draw one model: the manifest plus the pixmaps and
-    auto-detected pivots derived from it. Several are kept loaded at once so
-    the random-avatar mode can put different characters on stage side by side
-    without reloading anything mid-animation."""
+    auto-detected pivots derived from it. Packs are built lazily and cached by
+    OverlayWindow while their models are active or recently used."""
     model: AvatarModel
     pixmaps: dict[str, QPixmap]
     z_order: list[tuple[str, str]]
@@ -240,9 +240,13 @@ class OverlayWindow(QWidget):
         self._bubble_pixmap: QPixmap | None = None
         self.reload_bubble_image()
 
-        # name -> ModelPack. The active model is always present; the random
-        # mode adds the rest lazily via set_available_models().
+        # Manifests are cheap and all stay registered. Decoded QPixmaps are
+        # loaded on first use and kept in a small LRU cache; models currently
+        # visible on stage are never evicted.
+        self._models: dict[str, AvatarModel] = {model.name: model}
         self._packs: dict[str, ModelPack] = {model.name: ModelPack.build(model)}
+        self._pack_last_used: dict[str, int] = {model.name: 0}
+        self._pack_use_counter = 0
         self.random_model = False
         self._random_pool: list[str] = []
         self._model_weights: dict[str, float] = {}
@@ -310,31 +314,29 @@ class OverlayWindow(QWidget):
         # sparkle/emit) — unlike _sway_phase this never wraps, since effect
         # periods can be much longer than the sway cycle.
         self._clock_s = 0.0
-        self._recompute_sway_layers()
-
-        # Runs continuously — 30 FPS repaint of a mostly-transparent widget
-        # is cheap, and it's needed for the stage slide animation regardless
-        # of whether cosmetic sway is on, so there's no real upside to
-        # starting/stopping it.
+        # Start only while something is on stage.  Repainting a fully empty,
+        # transparent overlay forever wastes CPU/GPU time between messages.
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._on_animation_tick)
-        self._anim_timer.start(ANIMATION_INTERVAL_MS)
 
     def set_model(self, model: AvatarModel) -> None:
         """Hot-swap the displayed model (used by the settings "Модель" tab
         after an import, so the overlay updates without restarting the app)."""
         self.model = model
+        self._models[model.name] = model
         self._packs[model.name] = ModelPack.build(model)
+        self._touch_pack(model.name)
         self.stage.set_canvas_width(model.canvas_size[0])
         self._apply_geometry()
         self.setWindowTitle(f"Vocari - {model.name}")
-        self._recompute_sway_layers()
+        self._evict_unused_packs()
         self.update()
 
     def _recompute_sway_layers(self) -> None:
         """Pivots live on the ModelPack now; kept as a hook for callers that
         rebuild the active model in place."""
         self._packs[self.model.name] = ModelPack.build(self.model)
+        self._touch_pack(self.model.name)
 
     # -- stage geometry ---------------------------------------------------
 
@@ -441,24 +443,71 @@ class OverlayWindow(QWidget):
         """The model an instance was created with — it keeps its own character
         for its whole time on stage even if the active model changes, and in
         random mode neighbours on stage are different characters entirely."""
-        if inst is not None and inst.model_name in self._packs:
-            return self._packs[inst.model_name]
-        return self._packs[self.model.name]
+        has_instance_model = (
+            inst is not None
+            and (inst.model_name in self._models or inst.model_name in self._packs)
+        )
+        name = inst.model_name if has_instance_model else self.model.name
+        return self._ensure_pack(name)
+
+    def _touch_pack(self, name: str) -> None:
+        self._pack_use_counter += 1
+        self._pack_last_used[name] = self._pack_use_counter
+
+    def _ensure_pack(self, name: str) -> ModelPack:
+        pack = self._packs.get(name)
+        if pack is not None:
+            self._touch_pack(name)
+            return pack
+        if name not in self._models:
+            name = self.model.name
+        pack = self._packs.get(name)
+        if pack is None:
+            logger.debug("Ленивая загрузка PNG-слоёв модели '%s'", name)
+            pack = ModelPack.build(self._models[name])
+            self._packs[name] = pack
+        self._touch_pack(name)
+        return pack
+
+    def _evict_unused_packs(self) -> None:
+        protected = {self.model.name}
+        protected.update(inst.model_name for inst in self.stage.instances if inst.model_name)
+        for name in list(self._packs):
+            if name not in self._models and name not in protected:
+                self._packs.pop(name, None)
+                self._pack_last_used.pop(name, None)
+        candidates = sorted(
+            (name for name in self._packs if name not in protected),
+            key=lambda name: self._pack_last_used.get(name, -1),
+        )
+        while len(self._packs) > MAX_CACHED_MODEL_PACKS and candidates:
+            name = candidates.pop(0)
+            self._packs.pop(name, None)
+            self._pack_last_used.pop(name, None)
+            logger.debug("Выгружены PNG-слои неактивной модели '%s'", name)
 
     def set_available_models(self, models: list[AvatarModel]) -> None:
-        """Preloads every model that random mode may pick from."""
+        """Register manifests without decoding every model's PNG layers."""
         for model in models:
-            if model.name not in self._packs:
-                self._packs[model.name] = ModelPack.build(model)
+            if model.name != self.model.name:
+                self._models[model.name] = model
+
+    def remove_available_model(self, name: str) -> None:
+        """Stop future selection; retain a visible instance's pack until exit."""
+        if name == self.model.name:
+            return
+        self._models.pop(name, None)
+        if not any(inst.model_name == name for inst in self.stage.instances):
+            self._packs.pop(name, None)
+            self._pack_last_used.pop(name, None)
 
     def set_random_model(self, enabled: bool) -> None:
         self.random_model = enabled
 
     def set_random_pool(self, names: list[str]) -> None:
         """Restricts random mode to these model names (Settings → Модель's
-        per-model checkboxes). Empty = everyone eligible — including as the
-        fallback if every box got unchecked, since a pool nobody can be
-        drawn from would just make random mode draw nothing."""
+        per-model checkboxes). An empty pool falls back to the selected
+        active model."""
         self._random_pool = list(names)
 
     def set_model_weights(self, weights: dict[str, float]) -> None:
@@ -476,15 +525,14 @@ class OverlayWindow(QWidget):
 
     def _pick_model_name(self, author: str = "") -> str:
         bound = self._user_model_bindings.get(author.strip().lower()) if author else None
-        if bound and bound in self._packs:
+        if bound and bound in self._models:
             return bound
-        if self.random_model and len(self._packs) > 1:
-            pool = [name for name in self._packs if name in self._random_pool] if self._random_pool else list(self._packs)
+        if self.random_model and len(self._models) > 1:
+            pool = [name for name in self._models if name in self._random_pool]
             if pool:
                 weights = [max(0.0, self._model_weights.get(name, 1.0)) for name in pool]
                 if sum(weights) > 0:
                     return random.choices(pool, weights=weights, k=1)[0]
-                return random.choice(pool)
         return self.model.name
 
     def show_bubble_preview(self, text: str, author: str) -> None:
@@ -494,7 +542,9 @@ class OverlayWindow(QWidget):
         self.hide_bubble_preview()
         inst = self.stage.add(text, author, preview=True, model_name=self._pick_model_name(author))
         if inst is not None:
+            self._ensure_pack(inst.model_name)
             self._schedule_next_blink(inst.id)
+            self._ensure_animation_running()
         self.update()
 
     def hide_bubble_preview(self) -> None:
@@ -520,7 +570,9 @@ class OverlayWindow(QWidget):
         are taken (caller should keep `text` in its own backlog)."""
         inst = self.stage.add(text, author, model_name=self._pick_model_name(author))
         if inst is not None:
+            self._ensure_pack(inst.model_name)
             self._schedule_next_blink(inst.id)
+            self._ensure_animation_running()
         self.update()
         return inst
 
@@ -577,6 +629,10 @@ class OverlayWindow(QWidget):
         self._sway_enabled = enabled
         self.update()
 
+    def _ensure_animation_running(self) -> None:
+        if not self._anim_timer.isActive():
+            self._anim_timer.start(ANIMATION_INTERVAL_MS)
+
     def _instance_bounce_offset(self, inst: AvatarInstance) -> float:
         if not self._sway_enabled:
             return 0.0
@@ -592,6 +648,11 @@ class OverlayWindow(QWidget):
 
     def _on_animation_tick(self) -> None:
         self.stage.tick()  # entrance/exit/promotion — independent of "Покачивание"
+        self._evict_unused_packs()
+        if not self.stage.instances:
+            self._anim_timer.stop()
+            self.update()  # clear the final frame after the last exit
+            return
         self._clock_s += ANIMATION_INTERVAL_MS / 1000  # drives effect layers; never gated on sway
 
         if self._sway_enabled:

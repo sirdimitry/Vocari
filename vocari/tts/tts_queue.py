@@ -4,8 +4,9 @@ instant it arrives — only once its avatar instance has finished sliding into
 the speaking slot (Stage's speaker_ready callback) — so the jump-in
 animation naturally covers the synthesis/model-load latency instead of a
 separate fixed delay. Exactly one thing plays at a time by construction:
-Stage only ever promotes the next waiter after the current speaker has
-fully exited, so speaker_ready can't fire for two instances concurrently.
+Stage only has one current speaker. Skipping can leave an older synthesis
+running in the background; its result carries its original instance id
+and is discarded once that instance is no longer speaking.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import time
 from collections import deque
 from typing import Callable
 
-from PySide6.QtCore import QObject, QThread, QTimer
+from PySide6.QtCore import QObject, QThread, QTimer, Slot
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
@@ -38,6 +39,8 @@ ANNOUNCE_GAP_SECONDS = 0.25
 # than a pause, since these can happen several times in one sentence.
 SCRIPT_SWITCH_GAP_SECONDS = 0.08
 
+MAX_QUEUE_WAIT_SECONDS = 120.0
+
 
 class TTSQueue(QObject):
     def __init__(
@@ -55,10 +58,10 @@ class TTSQueue(QObject):
 
         # Messages that arrived while all 7 stage slots were taken — tried
         # again (via add_speaker) whenever a slot frees up.
-        self._backlog: deque[tuple[str, str]] = deque()  # (text, author)
-        self._thread: QThread | None = None
-        self._worker: SynthesisWorker | None = None
-        self._pending_instance_id = 0
+        self._backlog: deque[tuple[str, str, float]] = deque()  # text, author, deadline
+        # Keep skipped jobs alive until their threads finish as well.
+        self._synthesis_jobs: dict[QThread, SynthesisWorker] = {}
+        self._shutting_down = False
         # When the current speaker arrived in the slot — the pre-speech pause
         # is measured from here, so slow synthesis eats into it instead of
         # adding on top of it.
@@ -85,7 +88,12 @@ class TTSQueue(QObject):
 
         def fire() -> None:
             self._deferred_timers.remove(timer)
-            callback()
+            try:
+                callback()
+            finally:
+                # Single-shot timers stop automatically, but remain children
+                # of this queue until deleted, retaining the callback's audio.
+                timer.deleteLater()
 
         timer.timeout.connect(fire)
         self._deferred_timers.append(timer)
@@ -94,6 +102,7 @@ class TTSQueue(QObject):
     def _cancel_deferred(self) -> None:
         for timer in self._deferred_timers:
             timer.stop()
+            timer.deleteLater()
         self._deferred_timers.clear()
 
     def skip_current(self) -> None:
@@ -110,7 +119,10 @@ class TTSQueue(QObject):
         logger.info("Пропуск фразы по хоткею: '%s' (id=%d)", speaker.text, speaker.id)
         self.window.retire_speaker(speaker.id)
 
-    def enqueue(self, text: str, author: str = "") -> None:
+    def enqueue(self, text: str, author: str = "") -> bool:
+        """Accept a message, or return False when the waiting reserve is full."""
+        if self._shutting_down:
+            return False
         # The bubble-settings preview parks an instance in the speaking slot
         # with no synthesis and no auto-exit — if it's still up (the user
         # left "Держать облачко на экране" checked), a real message would
@@ -122,10 +134,24 @@ class TTSQueue(QObject):
             if self._on_preview_dismissed:
                 self._on_preview_dismissed()
 
-        inst = self.window.add_speaker(text, author)
-        if inst is None:
-            self._backlog.append((text, author))
-            logger.debug("TTS-очередь: сцена занята (7/7), сообщение ждёт в резерве (%d в резерве)", len(self._backlog))
+        # Move older requests first, and discard expired ones before checking
+        # capacity. A fresh arrival must never overtake the existing reserve.
+        self._on_slot_freed()
+        deadline = time.monotonic() + MAX_QUEUE_WAIT_SECONDS
+        if not self._backlog:
+            inst = self.window.add_speaker(text, author)
+            if inst is not None:
+                inst.queue_deadline = deadline
+                return True
+        # Read the shared config at admission so UI changes apply immediately.
+        # Lowering the limit preserves accepted messages while blocking new ones.
+        limit = max(1, min(1000, self.config.tts.max_backlog_messages))
+        if len(self._backlog) >= limit:
+            logger.warning("TTS-очередь: резерв заполнен (лимит %d), новое сообщение отклонено", limit)
+            return False
+        self._backlog.append((text, author, deadline))
+        logger.debug("TTS-очередь: сообщение ждёт в резерве (%d в резерве)", len(self._backlog))
+        return True
 
     def show_bubble_preview(self, message: tuple[str, str]) -> None:
         """Settings-window preview: park an avatar with its bubble up, no
@@ -141,15 +167,35 @@ class TTSQueue(QObject):
         self.window.hide_bubble_preview()
 
     def _on_slot_freed(self) -> None:
-        if self._backlog:
-            text, author = self._backlog.popleft()
+        now = time.monotonic()
+        expired = 0
+        while self._backlog and self._backlog[0][2] <= now:
+            self._backlog.popleft()
+            expired += 1
+        if expired:
+            logger.warning("TTS-очередь: истекло время ожидания, удалено из резерва: %d", expired)
+        while self._backlog:
+            text, author, deadline = self._backlog[0]
+            inst = self.window.add_speaker(text, author)
+            if inst is None:
+                break
+            self._backlog.popleft()
+            inst.queue_deadline = deadline
             logger.debug(
                 "TTS-очередь: сообщение из резерва выходит на сцену (%d осталось в резерве)",
                 len(self._backlog),
             )
-            self.enqueue(text, author)
 
     def _on_speaker_ready(self, instance_id: int) -> None:
+        if self._shutting_down:
+            return
+        inst = self.window.stage.get(instance_id)
+        if inst is None:
+            return
+        if inst.queue_deadline is not None and time.monotonic() >= inst.queue_deadline:
+            logger.warning("TTS-очередь: истекло время ожидания сообщения на сцене (id=%d)", instance_id)
+            self.window.retire_speaker(instance_id)
+            return
         try:
             self._start_synthesis(instance_id)
         except Exception:
@@ -244,6 +290,8 @@ class TTSQueue(QObject):
         return parts
 
     def _start_synthesis(self, instance_id: int) -> None:
+        if self._shutting_down:
+            return
         inst = self.window.stage.get(instance_id)
         if inst is None:
             return
@@ -256,18 +304,12 @@ class TTSQueue(QObject):
             self.config.tts.provider,
         )
 
-        # Only one synthesis is ever in flight at a time (Stage guarantees
-        # speaker_ready can't fire again until the current speaker has fully
-        # exited), so it's safe to stash the instance_id here rather than
-        # capture it in a per-call lambda — see the note on the connect()
-        # below for why that matters.
-        self._pending_instance_id = instance_id
         self._speaker_arrived_at = time.monotonic()
 
-        self._thread = QThread(self)
-        self._worker = SynthesisWorker(provider, parts, rate)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
+        thread = QThread(self)
+        worker = SynthesisWorker(provider, parts, rate, instance_id)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
         # A plain bound QObject-method slot, NOT a lambda/functools.partial:
         # PySide6 only auto-queues a cross-thread connection onto the
         # receiver's own thread when it can recognize the slot as a bound
@@ -276,14 +318,33 @@ class TTSQueue(QObject):
         # on the emitting worker thread instead — which silently breaks
         # anything Qt-affine downstream (e.g. audio_player's QTimer.start()
         # becomes a no-op because it's called from the wrong thread).
-        self._worker.finished.connect(self._on_synthesized_slot)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
-        self._thread.start()
+        worker.finished.connect(self._on_synthesized)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._on_synthesis_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._synthesis_jobs[thread] = worker
+        thread.start()
 
-    def _on_synthesized_slot(self, audio: bytes, error: str) -> None:
-        self._on_synthesized(self._pending_instance_id, audio, error)
+    def shutdown(self) -> None:
+        """Cancel active synthesis and synchronously release every QThread."""
+        self._shutting_down = True
+        self._backlog.clear()
+        self._cancel_deferred()
+        self.audio_player.stop()
+        jobs = list(self._synthesis_jobs.items())
+        for thread, worker in jobs:
+            worker.cancel()
+            thread.requestInterruption()
+            thread.quit()
+        for thread, _worker in jobs:
+            if thread.isRunning():
+                thread.wait()
+            self._synthesis_jobs.pop(thread, None)
+
+    @Slot()
+    def _on_synthesis_thread_finished(self) -> None:
+        self._synthesis_jobs.pop(self.sender(), None)
 
     def _is_stale(self, instance_id: int) -> bool:
         """True once this instance is gone or already heading off stage —
@@ -293,7 +354,10 @@ class TTSQueue(QObject):
         inst = self.window.stage.get(instance_id)
         return inst is None or inst.phase == "exiting"
 
+    @Slot(int, bytes, str)
     def _on_synthesized(self, instance_id: int, audio: bytes, error: str) -> None:
+        if self._shutting_down:
+            return
         if self._is_stale(instance_id):
             return
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -65,21 +66,52 @@ def _concatenate(results: list[SynthesisResult], gaps: list[float]) -> bytes:
 
 
 class SynthesisWorker(QObject):
-    finished = Signal(bytes, str)  # audio bytes, error message ("" on success)
+    finished = Signal(int, bytes, str)  # instance id, audio, error ("" on success)
 
-    def __init__(self, provider: TTSProvider, parts: list[SynthesisPart], rate: str):
+    def __init__(self, provider: TTSProvider, parts: list[SynthesisPart], rate: str, instance_id: int):
         super().__init__()
         self.provider = provider
         self.parts = parts
         self.rate = rate
+        self.instance_id = instance_id
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task | None = None
+        self._cancel_requested = threading.Event()
+
+    def cancel(self) -> None:
+        """Thread-safe cancellation for async providers such as Edge TTS."""
+        self._cancel_requested.set()
+        with self._lock:
+            loop, task = self._loop, self._task
+        if loop is not None and task is not None and not task.done():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # the worker completed while shutdown was requesting cancellation
 
     def run(self) -> None:
+        loop = asyncio.new_event_loop()
         try:
-            audio = asyncio.run(self._synthesize_all())
-            self.finished.emit(audio, "")
+            asyncio.set_event_loop(loop)
+            task = loop.create_task(self._synthesize_all())
+            with self._lock:
+                self._loop, self._task = loop, task
+            if self._cancel_requested.is_set():
+                task.cancel()
+            audio = loop.run_until_complete(task)
+            self.finished.emit(self.instance_id, audio, "")
+        except asyncio.CancelledError:
+            self.finished.emit(self.instance_id, b"", "Синтез отменён")
         except Exception as exc:  # noqa: BLE001 - surface any provider/network error to the caller
             logger.exception("Ошибка синтеза TTS")
-            self.finished.emit(b"", str(exc))
+            self.finished.emit(self.instance_id, b"", str(exc))
+        finally:
+            with self._lock:
+                self._task = None
+                self._loop = None
+            asyncio.set_event_loop(None)
+            loop.close()
 
     async def _synthesize_all(self) -> bytes:
         results = []

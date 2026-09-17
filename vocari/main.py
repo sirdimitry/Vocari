@@ -6,13 +6,13 @@ import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from vocari.__version__ import __version__
 from vocari.branding import app_icon
 from vocari.chat.base import ChatMessage
 from vocari.chat.filters import CooldownTracker, extract_command_text, find_blacklisted_word, has_access
-from vocari.config.settings import AppConfig, OverlayConfig
+from vocari.config.settings import AppConfig, ConfigSaveError, OverlayConfig
 from vocari.hotkey import GlobalHotkeyManager
 from vocari.logging_setup import get_logger, setup_logging
 from vocari.paths import app_root
@@ -41,6 +41,17 @@ logger = get_logger("main")
 TARGET_AVATAR_HEIGHT_FRACTION = 0.45  # avatar height, as a fraction of screen height
 TARGET_STAGE_WIDTH_FRACTION = 0.9  # full stage width (speaker + queue + exit corridor), as a fraction of screen width
 EDGE_MARGIN_PX = 20
+
+
+def _log_unhandled_exception(exc_type, exc_value, exc_tb) -> None:
+    if isinstance(exc_value, ConfigSaveError):
+        logger.error("%s", exc_value)
+        app = QApplication.instance()
+        if app is not None:
+            QMessageBox.warning(app.activeWindow(), "Настройки не сохранены", str(exc_value))
+        return
+    # Surface exceptions raised in Qt callbacks in windowed builds too.
+    logger.critical("Необработанное исключение — приложение может закрыться", exc_info=(exc_type, exc_value, exc_tb))
 
 
 def _apply_screen_defaults(config: AppConfig, model: AvatarModel) -> None:
@@ -119,16 +130,6 @@ def main() -> None:
     crash_log = open(log_file.parent / "crash.log", "a", encoding="utf-8")
     faulthandler.enable(file=crash_log, all_threads=True)
 
-    def _log_unhandled_exception(exc_type, exc_value, exc_tb) -> None:
-        # This is a windowed app (no console) - without this hook, an
-        # exception raised inside a Qt-invoked callback (a queued signal
-        # handler, paintEvent, a timer tick, ...) can terminate the whole
-        # process with nothing in vocari.log at all, since PySide6's own
-        # default handling for that case is silent. Logging it here first
-        # means the *next* time something like this happens, the log
-        # actually says why instead of just recording the next startup.
-        logger.critical("Необработанное исключение — приложение может закрыться", exc_info=(exc_type, exc_value, exc_tb))
-
     sys.excepthook = _log_unhandled_exception
 
     app = QApplication(sys.argv)
@@ -178,7 +179,8 @@ def main() -> None:
     _apply_screen_defaults(config, model)
 
     window = OverlayWindow(model, config.overlay, config.render, config.bubble)
-    # Preload every bundled model so random mode can mix characters on stage.
+    # Read every lightweight manifest so random mode knows its choices. PNG
+    # layers are decoded lazily by OverlayWindow when a model first appears.
     available = []
     for folder in sorted((PROJECT_ROOT / "assets" / "models").iterdir()):
         if not (folder / "model.json").exists():
@@ -210,7 +212,7 @@ def main() -> None:
 
     def on_random_pool_changed(names: list[str]) -> None:
         window.set_random_pool(names)
-        logger.info("Участвуют в случайном выборе: %s", ", ".join(names) or "все")
+        logger.info("Участвуют в случайном выборе: %s", ", ".join(names) or "нет — используется активная модель")
 
     def on_model_weights_changed(weights: dict[str, float]) -> None:
         window.set_model_weights(weights)
@@ -226,6 +228,7 @@ def main() -> None:
         # refresh_models() docstring for why this matters).
         window.set_model_weights(config.overlay.model_weights)
         window.set_user_model_bindings(config.overlay.user_model_bindings)
+        window.remove_available_model(name)
         settings_window.bindings_tab.refresh_models()
         logger.info("Модель '%s' удалена: привязки и веса очищены", name)
 
@@ -284,8 +287,8 @@ def main() -> None:
         )
         # Lets Settings -> Ники offer this nick for a model binding right
         # away, mid-stream, instead of requiring it to be typed by hand -
-        # add_known_nick() itself no-ops for a nick already on the list.
-        settings_window.bindings_tab.add_known_nick(message.display_name)
+        # Chat discovery is debounced and does not allocate hidden rows.
+        settings_window.bindings_tab.observe_nick(message.display_name)
         tts_queue.enqueue(text, message.display_name)
 
     twitch_bot.message_received.connect(on_chat_message)
@@ -317,8 +320,11 @@ def main() -> None:
 
     def on_quit() -> None:
         logger.info("Vocari завершает работу")
-        twitch_bot.stop()
-        audio_player.stop()
+        # Stop producers before saving/destroying their QObject owners. Each
+        # shutdown waits until its background threads can no longer signal Qt.
+        twitch_bot.stop(wait=True)
+        tts_queue.shutdown()
+        settings_window.shutdown_background_tasks()
         hotkey_manager.shutdown()
         window.sync_geometry_to_config()
         config.save()

@@ -102,6 +102,13 @@ class ModelTab(QWidget):
             for folder in (sorted(MODELS_ROOT.iterdir()) if MODELS_ROOT.exists() else [])
             if (folder / "model.json").exists()
         ]
+        if not self.config.overlay.random_pool_initialized:
+            # Migrate the old empty-means-all convention once. Afterwards an
+            # empty list is a real, persistent "no models selected" state.
+            self.config.overlay.random_pool = list(model_names)
+            self.config.overlay.random_pool_initialized = True
+            self.config.save()
+            self.on_random_pool_changed(list(model_names))
 
         picker = QFormLayout()
         # One list serves both jobs: picking the single active avatar (click
@@ -115,7 +122,7 @@ class ModelTab(QWidget):
         for name in model_names:
             self.model_combo.add_item(
                 name, f"assets/models/{name}",
-                name in self.config.overlay.random_pool or not self.config.overlay.random_pool,
+                name in self.config.overlay.random_pool,
                 deletable=name not in BUILTIN_MODEL_NAMES,
             )
         index = self.model_combo.findData(self.config.overlay.model_path)
@@ -134,8 +141,9 @@ class ModelTab(QWidget):
             "берётся случайный аватар из отмеченных галочкой в списке выше "
             "(галочка слева от названия — она не меняет активный аватар, "
             "только участие в розыгрыше), так что в очереди одновременно "
-            "могут стоять разные персонажи. Если не отмечено ничего — "
-            "участвуют все. Красный крестик справа от своих импортированных "
+            "могут стоять разные персонажи. Если ничего не отмечено или у "
+            "всех отмеченных моделей шанс равен 0%, используется текущий "
+            "активный аватар. Красный крестик справа от своих импортированных "
             "моделей удаляет их (папку с диска) — у встроенных аватаров "
             "крестика нет."
         )
@@ -228,7 +236,7 @@ class ModelTab(QWidget):
         side_row = QHBoxLayout()
         side_row.addWidget(QLabel("Выезд справа (вместо слева)"))
         side_row.addStretch()
-        self.entrance_side_toggle = ToggleSwitch()
+        self.entrance_side_toggle = ToggleSwitch("Выезд справа")
         self.entrance_side_toggle.setChecked(self.config.render.entrance_from_right)
         self.entrance_side_toggle.toggled.connect(self._on_entrance_side_toggled)
         side_row.addWidget(self.entrance_side_toggle)
@@ -433,7 +441,7 @@ class ModelTab(QWidget):
 
         try:
             result = import_model_from_folder(Path(folder), MODELS_ROOT)
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             logger.error("Импорт модели из %s не удался: %s", folder, exc)
             self.status_label.setStyleSheet("color:#ff5c5c;")
             self.status_label.setText(f"Ошибка: {exc}")
@@ -443,9 +451,8 @@ class ModelTab(QWidget):
         self.config.save()
         self.current_label.setText(f"Текущая модель: {self.config.overlay.model_path}")
 
-        # Appends live instead of requiring settings to be reopened — a
-        # re-import of an existing name (folder already present) just
-        # reselects it rather than adding a duplicate row.
+        # The importer reserves a unique name, including on repeated imports.
+        # Make the new model available without reopening settings.
         existing = self.model_combo.findData(self.config.overlay.model_path)
         if existing >= 0:
             self.model_combo.setCurrentIndex(existing)

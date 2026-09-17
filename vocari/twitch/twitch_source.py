@@ -20,6 +20,7 @@ class TwitchChatSource(ChatSource):
     def __init__(self, config: TwitchConfig):
         self.config = config
         self._bot: commands.Bot | None = None
+        self._stop_requested = False
 
     async def start(
         self,
@@ -54,8 +55,12 @@ class TwitchChatSource(ChatSource):
             prefix="!",  # unused: we parse the configurable command_prefix ourselves
             initial_channels=[channel],
         )
+        if self._stop_requested:
+            await self._bot.close()
+            return
         await self._bot.start()  # blocks until close()
 
     async def stop(self) -> None:
+        self._stop_requested = True
         if self._bot is not None:
             await self._bot.close()

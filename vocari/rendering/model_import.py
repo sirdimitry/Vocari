@@ -97,11 +97,27 @@ def import_model_from_folder(source_dir: Path, models_root: Path) -> ImportResul
         order = sum(1 for f in base_layers if f < frames["open"])
         manifest_states[key] = {"order": order, **frames}
 
-    model_name = source_dir.name
-    target_dir = models_root / model_name
-    target_dir.mkdir(parents=True, exist_ok=True)
-    for filename in png_files:
-        shutil.copy2(source_dir / filename, target_dir / filename)
+    # Reserve a new directory exclusively: even a repeated import, or two
+    # imports racing for the same name, must never overwrite an existing model.
+    models_root = Path(models_root)
+    models_root.mkdir(parents=True, exist_ok=True)
+    original_name = source_dir.name or "Model"
+    model_name = original_name
+    suffix = 2
+    while True:
+        target_dir = models_root / model_name
+        try:
+            target_dir.mkdir()
+        except FileExistsError:
+            model_name = f"{original_name} ({suffix})"
+            suffix += 1
+        else:
+            break
+    if model_name != original_name:
+        warnings.append(
+            f"Имя «{original_name}» занято — модель импортирована как «{model_name}». "
+            "Существующая модель не изменена."
+        )
 
     manifest = {
         "name": model_name,
@@ -109,9 +125,30 @@ def import_model_from_folder(source_dir: Path, models_root: Path) -> ImportResul
         "base_layers": base_layers,
         "states": manifest_states,
     }
-    (target_dir / "model.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    created_files: list[Path] = []
+    try:
+        for filename in png_files:
+            destination = target_dir / filename
+            created_files.append(destination)  # includes a partially copied file
+            shutil.copy2(source_dir / filename, destination)
+        manifest_path = target_dir / "model.json"
+        created_files.append(manifest_path)
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        # Only remove files this attempt created in its exclusively reserved
+        # directory. Never recursively delete a user-supplied model folder.
+        for path in created_files:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            target_dir.rmdir()
+        except OSError:
+            pass
+        raise
 
     return ImportResult(
         model_name=model_name,

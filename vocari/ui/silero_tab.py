@@ -10,9 +10,10 @@ isn't worth trying to redo mid-run for what's a rare, one-off event)."""
 from __future__ import annotations
 
 import sys
+import threading
 from typing import Callable
 
-from PySide6.QtCore import QObject, QProcess, QThread, Signal
+from PySide6.QtCore import QObject, QProcess, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from vocari.logging_setup import get_logger
-from vocari.runtime_deps import TORCH_CPU, download, ensure_on_path
+from vocari.runtime_deps import DownloadCancelled, TORCH_CPU, download, ensure_on_path
 from vocari.tts.silero_provider import SileroTTSProvider
 
 logger = get_logger("tts.silero_tab")
@@ -48,10 +49,18 @@ class _PreloadWorker(QObject):
         super().__init__()
         self.provider = provider
         self.lang = lang
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
 
     def run(self) -> None:
         try:
+            if self._cancelled.is_set():
+                return
             self.provider.preload(self.lang)
+            if self._cancelled.is_set():
+                return
             speakers = self.provider.speakers(self.lang)
             self.finished.emit(self.lang, str(len(speakers)), "")
         except Exception as exc:  # noqa: BLE001 - surface any download/load error to the UI
@@ -63,10 +72,22 @@ class _TorchDownloadWorker(QObject):
     progress = Signal(int, int)  # downloaded_bytes, total_bytes (0 = unknown)
     finished = Signal(str)  # error message, "" on success
 
+    def __init__(self):
+        super().__init__()
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
     def run(self) -> None:
         try:
-            download(TORCH_CPU, lambda done, total: self.progress.emit(done, total))
+            download(
+                TORCH_CPU, lambda done, total: self.progress.emit(done, total),
+                is_cancelled=self._cancelled.is_set,
+            )
             self.finished.emit("")
+        except DownloadCancelled:
+            self.finished.emit("Загрузка отменена")
         except Exception as exc:  # noqa: BLE001 - surface any network/disk error to the UI
             logger.exception("Не удалось скачать PyTorch")
             self.finished.emit(str(exc))
@@ -79,6 +100,9 @@ class SileroTab(QWidget):
         self.on_voices_loaded = on_voices_loaded
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, _PreloadWorker] = {}
+        self._torch_thread: QThread | None = None
+        self._torch_worker: _TorchDownloadWorker | None = None
+        self._shutting_down = False
 
         self.layout_ = QVBoxLayout(self)
 
@@ -148,11 +172,14 @@ class SileroTab(QWidget):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_thread_finished)
         self._threads[lang] = thread
         self._workers[lang] = worker
         thread.start()
 
     def _on_preload_finished(self, lang: str, speaker_count: str, error: str) -> None:
+        if self._shutting_down:
+            return
         if error:
             self.status_labels[lang].setStyleSheet("color:#ff5c5c;")
             self.status_labels[lang].setText(f"ошибка: {error}")
@@ -224,6 +251,7 @@ class SileroTab(QWidget):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_torch_thread_finished)
         self._torch_thread = thread
         self._torch_worker = worker
         thread.start()
@@ -237,6 +265,8 @@ class SileroTab(QWidget):
             self.download_status.setText(f"Скачано {downloaded // (1024 * 1024)} МБ")
 
     def _on_torch_download_finished(self, error: str) -> None:
+        if self._shutting_down:
+            return
         if error:
             self.progress_bar.hide()
             self.download_status.setStyleSheet("color:#ff5c5c;")
@@ -266,3 +296,34 @@ class SileroTab(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.quit()
+
+    @Slot()
+    def _on_thread_finished(self) -> None:
+        thread = self.sender()
+        for lang, candidate in list(self._threads.items()):
+            if candidate is thread:
+                self._threads.pop(lang, None)
+                self._workers.pop(lang, None)
+                break
+
+    @Slot()
+    def _on_torch_thread_finished(self) -> None:
+        self._torch_thread = None
+        self._torch_worker = None
+
+    def shutdown(self) -> None:
+        self._shutting_down = True
+        jobs = [(self._threads[key], worker) for key, worker in list(self._workers.items()) if key in self._threads]
+        if self._torch_thread is not None and self._torch_worker is not None:
+            jobs.append((self._torch_thread, self._torch_worker))
+        for thread, worker in jobs:
+            worker.cancel()
+            thread.requestInterruption()
+            thread.quit()
+        for thread, _worker in jobs:
+            if thread.isRunning():
+                thread.wait()
+        self._threads.clear()
+        self._workers.clear()
+        self._torch_thread = None
+        self._torch_worker = None

@@ -127,11 +127,11 @@ class TwitchTab(QWidget):
         access_hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(access_hint)
 
-        self.subs_toggle = ToggleSwitch()
+        self.subs_toggle = ToggleSwitch("Только подписчики")
         self.subs_toggle.setChecked(config.twitch.subs_only)
-        self.vip_toggle = ToggleSwitch()
+        self.vip_toggle = ToggleSwitch("Только VIP")
         self.vip_toggle.setChecked(config.twitch.vip_only)
-        self.mods_toggle = ToggleSwitch()
+        self.mods_toggle = ToggleSwitch("Только модераторы")
         self.mods_toggle.setChecked(config.twitch.mods_only)
 
         access_row = QHBoxLayout()

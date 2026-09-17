@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
@@ -31,6 +31,8 @@ logger = get_logger("settings_window")
 MODELS_ROOT = app_root() / "assets" / "models"
 NO_BINDING = ""  # sentinel stored in config for "не привязан — участвует как аноним"
 WEIGHT_SLIDER_MAX = 300  # % — 3x more likely than a freshly-imported model at its default 100%
+MAX_KNOWN_NICKS = 200
+NICK_SAVE_DEBOUNCE_MS = 1000
 
 
 def _model_names() -> list[str]:
@@ -54,6 +56,11 @@ class BindingsTab(QWidget):
         self.on_weights_changed = on_weights_changed
         self._nick_rows: dict[str, QWidget] = {}  # lowercased nick -> row
         self._weight_rows: dict[str, QWidget] = {}  # model name -> row
+        self._nick_save_timer = QTimer(self)
+        self._nick_save_timer.setSingleShot(True)
+        self._nick_save_timer.setInterval(NICK_SAVE_DEBOUNCE_MS)
+        self._nick_save_timer.timeout.connect(self.config.save)
+        self._trim_known_nicks()
 
         root = QVBoxLayout(self)
         root.addWidget(self._build_bindings_group())
@@ -73,7 +80,8 @@ class BindingsTab(QWidget):
             "выбор. Список ников пополняется сам по мере того, как люди "
             "пишут !tts в чате Twitch — можно привязать сразу, как только "
             "человек написал хоть раз, прямо во время эфира; либо добавить "
-            "ник вручную заранее."
+            "ник вручную заранее. Автоматически сохраняются последние 200 "
+            "ников; ники с назначенной моделью не удаляются из истории."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -103,6 +111,42 @@ class BindingsTab(QWidget):
 
     def _update_no_nicks_label(self) -> None:
         self.no_nicks_label.setVisible(not self._nick_rows)
+
+    def _trim_known_nicks(self) -> None:
+        """Bound history without ever discarding an explicit model binding."""
+        seen: set[str] = set()
+        unique: list[str] = []
+        for nick in self.config.overlay.known_nicks:
+            key = nick.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(nick.strip())
+
+        while len(unique) > MAX_KNOWN_NICKS:
+            removable = next(
+                (i for i, nick in enumerate(unique)
+                 if nick.lower() not in self.config.overlay.user_model_bindings),
+                None,
+            )
+            if removable is None:
+                break
+            unique.pop(removable)
+        self.config.overlay.known_nicks = unique
+
+    def _sync_nick_rows(self) -> None:
+        wanted = {nick.strip().lower() for nick in self.config.overlay.known_nicks}
+        for key in list(self._nick_rows):
+            if key not in wanted:
+                row = self._nick_rows.pop(key)
+                row.setParent(None)
+                row.deleteLater()
+        for nick in self.config.overlay.known_nicks:
+            self._add_nick_row(nick)
+        self._update_no_nicks_label()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        self._sync_nick_rows()
+        super().showEvent(event)
 
     def _add_nick_row(self, nick: str) -> None:
         key = nick.strip().lower()
@@ -141,16 +185,42 @@ class BindingsTab(QWidget):
         self.add_known_nick(nick)
 
     def add_known_nick(self, nick: str) -> None:
-        """Called live from main.py whenever chat activity names a nick that
-        hasn't been seen before — also used for the manual "add by hand"
-        field above, so both paths share one code path and one saved list."""
+        """Add a nick explicitly from the settings field."""
+        self._remember_nick(nick, save_immediately=True, update_ui=True)
+
+    def observe_nick(self, nick: str) -> None:
+        """Record chat activity cheaply without growing hidden UI widgets."""
+        self._remember_nick(nick, save_immediately=False, update_ui=self.isVisible())
+
+    def _remember_nick(self, nick: str, *, save_immediately: bool, update_ui: bool) -> None:
         key = nick.strip().lower()
-        if not key or key in self._nick_rows:
+        known_keys = {value.strip().lower() for value in self.config.overlay.known_nicks}
+        if not key or key in known_keys:
             return
+
+        if len(self.config.overlay.known_nicks) >= MAX_KNOWN_NICKS:
+            removable = next(
+                (i for i, value in enumerate(self.config.overlay.known_nicks)
+                 if value.strip().lower() not in self.config.overlay.user_model_bindings),
+                None,
+            )
+            if removable is None:
+                return
+            removed = self.config.overlay.known_nicks.pop(removable).strip().lower()
+            old_row = self._nick_rows.pop(removed, None)
+            if old_row is not None:
+                old_row.setParent(None)
+                old_row.deleteLater()
+
         self.config.overlay.known_nicks.append(nick.strip())
-        self.config.save()
-        self._add_nick_row(nick.strip())
-        self._update_no_nicks_label()
+        if save_immediately:
+            self._nick_save_timer.stop()
+            self.config.save()
+        else:
+            self._nick_save_timer.start()
+        if update_ui:
+            self._add_nick_row(nick.strip())
+            self._update_no_nicks_label()
 
     def _on_remove_nick(self, key: str) -> None:
         row = self._nick_rows.pop(key, None)
@@ -183,7 +253,8 @@ class BindingsTab(QWidget):
             "100% — обычная, равная со всеми доля; больше — чаще выпадает, "
             "0% — не участвует в случайном выборе вообще (но всё ещё "
             "доступен для ручной привязки по нику выше). Влияет только на "
-            "\"Случайный аватар\" в настройках Модели."
+            "\"Случайный аватар\" в настройках Модели. Если у всех выбранных "
+            "моделей 0%, используется текущий активный аватар."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")

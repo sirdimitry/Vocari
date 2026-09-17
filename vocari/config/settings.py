@@ -10,12 +10,52 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 import json
+import os
+import tempfile
 
 from vocari.config import dpapi
 from vocari.paths import app_root
+from vocari.logging_setup import get_logger
 
 PROJECT_ROOT = app_root()
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
+logger = get_logger("config.settings")
+
+
+class ConfigSaveError(RuntimeError):
+    """Settings could not be saved; safe to display to the user."""
+
+
+class ConfigEncryptionError(ConfigSaveError):
+    """Saving stopped before opening the config because encryption failed."""
+
+
+def _encrypt(plaintext: bytes) -> bytes:
+    try:
+        return dpapi.protect(plaintext)
+    except (OSError, ImportError, ValueError):
+        raise ConfigEncryptionError(
+            "Не удалось зашифровать настройки. Изменения не записаны на диск; "
+            "существующий файл настроек не изменён. "
+            "Восстановите работу шифрования и повторите сохранение."
+        ) from None
+
+
+def _atomic_write(path: Path, encrypted: bytes) -> None:
+    """Flush ciphertext to a sibling file, close it, then replace atomically."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(encrypted)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _merge_section(section_cls, saved: dict):
@@ -46,10 +86,11 @@ class OverlayConfig:
     random_model: bool = False
     # Which model names are eligible when random_model is on — a model with
     # an unchecked box in Settings → Модель never gets picked. Empty means
-    # "everyone eligible" (the default, and also what an unchecked-everyone
-    # state falls back to, since a pool nobody can be drawn from isn't a
-    # useful configuration).
+    # no random candidate, so the selected active model is used.
     random_pool: list[str] = field(default_factory=list)
+    # Distinguishes an old/default empty pool (which historically meant
+    # "all models") from a pool the user explicitly cleared.
+    random_pool_initialized: bool = False
     # Relative weight per model name when random_model picks among the pool
     # above — a model missing here defaults to 1.0 (see
     # overlay_window.py's _pick_model_name), so importing a new model needs
@@ -179,6 +220,7 @@ class TTSConfig:
     auto_detect_language: bool = True
     manual_lang: str = "ru"  # used instead of detection when auto_detect_language is off
     max_chars: int = 200
+    max_backlog_messages: int = 30  # 1..1000 waiting off stage, not a per-stream total
     random_voice: bool = False  # pick a random voice (see tts/voices.py) per utterance, for whichever provider is selected
 
 
@@ -206,13 +248,22 @@ class AppConfig:
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "AppConfig":
-        if not path.exists():
-            return cls()
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            return cls()
+        path = Path(path)
+        backup = path.with_name(path.name + ".bak")
+        for candidate in (path, backup):
+            try:
+                config = cls._from_bytes(candidate.read_bytes())
+            except (OSError, ValueError, TypeError):
+                continue
+            if candidate == backup:
+                logger.warning("Основной файл настроек недоступен или повреждён — использована резервная копия")
+            return config
+        if path.exists() or backup.exists():
+            logger.error("Не удалось прочитать настройки и резервную копию — используются значения по умолчанию")
+        return cls()
 
+    @classmethod
+    def _from_bytes(cls, raw: bytes) -> "AppConfig":
         try:
             plaintext = dpapi.unprotect(raw)
         except OSError:
@@ -222,14 +273,14 @@ class AppConfig:
             # the next save() re-writes it encrypted.
             plaintext = raw
 
-        try:
-            # utf-8-sig tolerates (and strips) a UTF-8 BOM — Notepad, and some
-            # PowerShell versions, save UTF-8 files with one by default, which
-            # would otherwise make json.loads() fail and silently reset to
-            # defaults on the very first read.
-            data = json.loads(plaintext.decode("utf-8-sig"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return cls()
+        # Invalid files must raise here so callers can try the backup, rather
+        # than accidentally accepting defaults as a successful primary load.
+        data = json.loads(plaintext.decode("utf-8-sig"))
+        if not isinstance(data, dict):
+            raise ValueError("Настройки должны содержать объект JSON")
+        for section in ("overlay", "render", "tts", "twitch", "hotkey", "bubble"):
+            if section in data and not isinstance(data[section], dict):
+                raise ValueError("Некорректная секция настроек")
         overlay = _merge_section(OverlayConfig, data.get("overlay", {}))
         render = _merge_section(RenderConfig, data.get("render", {}))
         tts = _merge_section(TTSConfig, data.get("tts", {}))
@@ -241,22 +292,26 @@ class AppConfig:
         )
 
     def save(self, path: Path = DEFAULT_CONFIG_PATH) -> None:
-        payload = {
-            "overlay": asdict(self.overlay),
-            "render": asdict(self.render),
-            "tts": asdict(self.tts),
-            "twitch": asdict(self.twitch),
-            "hotkey": asdict(self.hotkey),
-            "bubble": asdict(self.bubble),
-        }
-        plaintext = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        path = Path(path)
+        backup = path.with_name(path.name + ".bak")
+        encrypted = _encrypt(json.dumps(asdict(self), ensure_ascii=False, indent=2).encode("utf-8"))
+        previous = None
         try:
-            # Encrypted at rest (Windows DPAPI, tied to this Windows user) so
-            # config.json isn't plain, hand-editable JSON on disk — the
-            # Twitch OAuth token especially has no business being readable/
-            # editable in a text editor. See vocari/config/dpapi.py.
-            path.write_bytes(dpapi.protect(plaintext))
+            previous = self._from_bytes(path.read_bytes())
+        except (OSError, ValueError, TypeError):
+            pass  # Do not replace a good backup with a corrupt primary file.
+        # Re-encrypt legacy plaintext settings before making a backup too.
+        backup_bytes = (
+            _encrypt(json.dumps(asdict(previous), ensure_ascii=False, indent=2).encode("utf-8"))
+            if previous is not None else encrypted
+        )
+        try:
+            if previous is not None or not backup.exists():
+                _atomic_write(backup, backup_bytes)
+            _atomic_write(path, encrypted)
         except OSError:
-            # DPAPI unavailable for some reason — fail safe by still saving
-            # something usable rather than losing the user's settings.
-            path.write_bytes(plaintext)
+            raise ConfigSaveError(
+                "Не удалось записать настройки. Изменения не сохранены. "
+                "Проверьте свободное место на диске и доступ к папке приложения, "
+                "затем повторите сохранение."
+            ) from None

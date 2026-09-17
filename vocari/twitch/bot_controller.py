@@ -27,6 +27,7 @@ class TwitchBotController(QObject):
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._source: TwitchChatSource | None = None
+        self._stop_requested = threading.Event()
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -35,12 +36,20 @@ class TwitchBotController(QObject):
         if self.is_running():
             return
         self.status_changed.emit("connecting", "")
+        self._stop_requested.clear()
         self._thread = threading.Thread(target=self._run, name="twitch-bot", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, wait: bool = False) -> None:
+        self._stop_requested.set()
         if self._loop is not None and self._source is not None:
-            asyncio.run_coroutine_threadsafe(self._source.stop(), self._loop)
+            try:
+                asyncio.run_coroutine_threadsafe(self._source.stop(), self._loop)
+            except RuntimeError:
+                pass  # the event loop completed during the shutdown request
+        thread = self._thread
+        if wait and thread is not None and thread is not threading.current_thread():
+            thread.join()
 
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -56,6 +65,8 @@ class TwitchBotController(QObject):
         finally:
             self._loop.close()
             self._loop = None
+            self._source = None
+            self._thread = None
 
     async def _main(self) -> None:
         def on_message(message: ChatMessage) -> None:
@@ -69,4 +80,7 @@ class TwitchBotController(QObject):
             self.status_changed.emit("connected", self.config.channel)
 
         assert self._source is not None
+        if self._stop_requested.is_set():
+            await self._source.stop()
+            return
         await self._source.start(on_message, on_connected)

@@ -36,6 +36,7 @@ this stdlib copy here is a second line of defense for anything that isn't.
 """
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sys
 import tarfile
@@ -54,12 +55,22 @@ logger = get_logger("runtime_deps")
 RUNTIME_DEPS_DIR = app_root() / "runtime_deps"
 
 
+class DownloadCancelled(RuntimeError):
+    """A background download was cancelled during application shutdown."""
+
+
+def _check_cancelled(is_cancelled: Callable[[], bool] | None) -> None:
+    if is_cancelled is not None and is_cancelled():
+        raise DownloadCancelled("Загрузка отменена при завершении приложения")
+
+
 @dataclass(frozen=True)
 class RuntimeDep:
     label: str  # shown in the UI
     dir_name: str  # subfolder under runtime_deps/
     url: str
     approx_size_mb: int
+    sha256: str  # pinned in the app, never fetched alongside a download at runtime
     # Bumped whenever the hosted zip's *contents* change (not just its
     # bytes/URL) — e.g. adding a missing stdlib module the first cut of this
     # bundle turned out not to include. The marker file records which
@@ -75,6 +86,7 @@ TORCH_CPU = RuntimeDep(
     dir_name="torch_cpu",
     url="https://github.com/sirdimitry/Vocari/releases/download/runtime-deps-torch-cpu-v1/torch_cpu_win_amd64_py312.zip",
     approx_size_mb=160,
+    sha256="63ba526ca47744cb51891e180f15dce77d77017b4710e5724a9c9353bb0c1d0f",
     version=2,  # v2: bundles the full stdlib + omegaconf's deps too - v1 was missing timeit/xml.etree/omegaconf etc.
 )
 
@@ -87,16 +99,20 @@ TORCH_CPU = RuntimeDep(
 # a plain "piper", see PiperTTSProvider.BINARY_NAME).
 if sys.platform == "win32":
     _PIPER_ASSET = "piper_windows_amd64.zip"
+    _PIPER_SHA256 = "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea"
 elif sys.platform == "darwin":
     _PIPER_ASSET = "piper_macos_x64.tar.gz"
+    _PIPER_SHA256 = "ced85c0a3df13945b1e623b878a48fdc2854d5c485b4b67f62857cf551deaf8b"
 else:
     _PIPER_ASSET = "piper_linux_x86_64.tar.gz"
+    _PIPER_SHA256 = "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992"
 
 PIPER_ENGINE = RuntimeDep(
     label="Piper (офлайн-голоса)",
     dir_name="piper_engine",
     url=f"https://github.com/rhasspy/piper/releases/download/2023.11.14-2/{_PIPER_ASSET}",
     approx_size_mb=25,
+    sha256=_PIPER_SHA256,
     version=1,
 )
 
@@ -136,10 +152,10 @@ def is_downloaded(dep: RuntimeDep) -> bool:
     if not marker.exists():
         return False
     try:
-        recorded_version = int(marker.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return False  # marker from before versioning existed, or corrupted — treat as stale
-    return recorded_version == dep.version
+        recorded_version = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return False  # unreadable/corrupted marker — treat as stale
+    return recorded_version == f"{dep.version}:{dep.sha256}"
 
 
 def ensure_on_path(dep: RuntimeDep) -> None:
@@ -161,7 +177,11 @@ def ensure_all_on_path() -> None:
         ensure_on_path(dep)
 
 
-def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
+def download(
+    dep: RuntimeDep,
+    on_progress: Callable[[int, int], None],
+    is_cancelled: Callable[[], bool] | None = None,
+) -> None:
     """Blocking (network + disk I/O) — call from a background thread, not
     the Qt main thread. Downloads the archive and extracts it into place
     (.zip or .tar.gz, by `dep.url`'s extension - see PIPER_ENGINE for why
@@ -170,38 +190,40 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
     Content-Length, so callers should treat that as "unknown" rather than
     divide by it."""
     target = _dep_path(dep)
-    if target.exists():
-        shutil.rmtree(target)
+    # Only an immediate child of our dependency directory can be replaced.
+    if target.is_symlink() or target.resolve().parent != RUNTIME_DEPS_DIR.resolve():
+        raise ValueError("Недопустимый путь установки зависимости")
     RUNTIME_DEPS_DIR.mkdir(parents=True, exist_ok=True)
 
     is_tar = dep.url.endswith(".tar.gz")
     logger.info("Скачивание %s: %s -> %s", dep.label, dep.url, target)
     tmp_archive = RUNTIME_DEPS_DIR / f"{dep.dir_name}.download{'.tar.gz' if is_tar else '.zip'}"
-    progress = _throttled(on_progress)
     try:
         try:
-            with urllib.request.urlopen(dep.url) as response:
-                total = int(response.headers.get("Content-Length", 0))
-                downloaded = 0
-                with open(tmp_archive, "wb") as f:
-                    while True:
-                        chunk = response.read(1024 * 256)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        progress(downloaded, total)
-            logger.info("Скачано %s: %d байт (ожидалось %d)", dep.label, downloaded, total)
+            download_raw_file(
+                dep.url, tmp_archive, on_progress, sha256=dep.sha256,
+                is_cancelled=is_cancelled,
+            )
 
+            # A rejected/corrupt download must leave the previous install intact.
+            _check_cancelled(is_cancelled)
+            if target.exists():
+                shutil.rmtree(target)
             target.mkdir(parents=True, exist_ok=True)
             if is_tar:
                 with tarfile.open(tmp_archive) as tf:
-                    tf.extractall(target)  # tar entries carry real Unix perms (exec bits included), unlike zip
+                    tf.extractall(target, filter="data")
             else:
                 with zipfile.ZipFile(tmp_archive) as zf:
+                    for entry in zf.infolist():
+                        destination = (target / entry.filename).resolve()
+                        if not destination.is_relative_to(target.resolve()):
+                            raise ValueError("Архив содержит путь вне папки установки")
                     zf.extractall(target)
-            _marker(dep).write_text(str(dep.version), encoding="utf-8")
+            _marker(dep).write_text(f"{dep.version}:{dep.sha256}", encoding="utf-8")
             logger.info("Распаковано и готово: %s", dep.label)
+        except DownloadCancelled:
+            raise
         except Exception:
             logger.exception("Не удалось скачать/распаковать %s (%s)", dep.label, dep.url)
             raise
@@ -211,32 +233,61 @@ def download(dep: RuntimeDep, on_progress: Callable[[int, int], None]) -> None:
     ensure_on_path(dep)
 
 
-def download_raw_file(url: str, dest: Path, on_progress: Callable[[int, int], None]) -> None:
+def verify_file(path: Path, sha256: str) -> None:
+    """Check cached executable/model content before loading it."""
+    with path.open("rb") as source:
+        actual = hashlib.file_digest(source, "sha256").hexdigest()
+    if actual != sha256:
+        raise ValueError(f"Проверка SHA-256 не пройдена: {path.name}")
+
+
+def download_raw_file(
+    url: str,
+    dest: Path,
+    on_progress: Callable[[int, int], None],
+    *,
+    sha256: str,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> None:
     """Blocking (network + disk I/O) — call from a background thread. Plain
     single-file download, not a RuntimeDep zip — used for individual Piper
     voice model files (a .onnx + its .onnx.json, downloaded one at a time
     rather than as one big bundle, since there can be many voices and a user
     only wants a few). Downloads to a temp name first and renames on
     success, so a failed/interrupted download can never look like a
-    complete file to a later is_voice_available()-style check."""
+    complete file to a later is_voice_available()-style check. The expected
+    SHA-256 must be pinned by the caller; no unverified downloads are allowed."""
+    if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+        raise ValueError("Не задана корректная контрольная сумма SHA-256")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest.with_suffix(dest.suffix + ".part")
     logger.info("Скачивание файла: %s -> %s", url, dest)
     progress = _throttled(on_progress)
     try:
         try:
-            with urllib.request.urlopen(url) as response:
+            _check_cancelled(is_cancelled)
+            digest = hashlib.sha256()
+            with urllib.request.urlopen(url, timeout=30) as response:
                 total = int(response.headers.get("Content-Length", 0))
                 downloaded = 0
                 with open(tmp_path, "wb") as f:
                     while True:
+                        _check_cancelled(is_cancelled)
                         chunk = response.read(1024 * 256)
                         if not chunk:
                             break
                         f.write(chunk)
+                        digest.update(chunk)
                         downloaded += len(chunk)
                         progress(downloaded, total)
-            logger.info("Скачан файл %s: %d байт (ожидалось %d)", dest.name, downloaded, total)
+            _check_cancelled(is_cancelled)
+            if total and downloaded != total:
+                raise ValueError(f"Файл скачан не полностью: {dest.name}")
+            if digest.hexdigest() != sha256:
+                raise ValueError(f"Проверка SHA-256 не пройдена: {dest.name}")
+            logger.info("Скачан и проверен файл %s: %d байт", dest.name, downloaded)
+        except DownloadCancelled:
+            raise
         except Exception:
             logger.exception("Не удалось скачать файл %s (%s)", dest.name, url)
             raise

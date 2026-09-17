@@ -86,6 +86,23 @@ class TTSTab(QWidget):
         self.max_chars_spin.valueChanged.connect(self._on_max_chars_changed)
         form.addRow("Лимит длины текста:", self.max_chars_spin)
 
+        self.max_backlog_spin = QSpinBox()
+        self.max_backlog_spin.setRange(1, 1000)
+        self.max_backlog_spin.setKeyboardTracking(False)
+        self.max_backlog_spin.setValue(config.tts.max_backlog_messages)
+        self.max_backlog_spin.valueChanged.connect(self._on_max_backlog_changed)
+        form.addRow("Сообщений в резервной очереди:", self.max_backlog_spin)
+
+        queue_hint = QLabel(
+            "Сколько сообщений могут ждать одновременно сверх 7 мест на сцене. "
+            "Общее число сообщений за стрим не ограничено. При заполнении новые "
+            "сообщения отклоняются; ожидающие более 2 минут пропускаются перед синтезом. "
+            "Изменение действует сразу. При уменьшении лимита уже принятые сообщения остаются в очереди."
+        )
+        queue_hint.setWordWrap(True)
+        queue_hint.setStyleSheet("color: gray; font-size: 11px;")
+        form.addRow(queue_hint)
+
         layout.addLayout(form)
 
         self.voices_hint = QLabel("")
@@ -101,7 +118,7 @@ class TTSTab(QWidget):
         random_row = QHBoxLayout()
         random_row.addWidget(QLabel("Случайный голос на каждую фразу"))
         random_row.addStretch()
-        self.random_voice_toggle = ToggleSwitch()
+        self.random_voice_toggle = ToggleSwitch("Случайный голос")
         self.random_voice_toggle.setChecked(config.tts.random_voice)
         self.random_voice_toggle.toggled.connect(self._on_random_voice_toggled)
         random_row.addWidget(self.random_voice_toggle)
@@ -113,7 +130,7 @@ class TTSTab(QWidget):
         layout.addWidget(self.random_hint)
 
         auto_row = QFormLayout()
-        self.auto_detect_toggle = ToggleSwitch()
+        self.auto_detect_toggle = ToggleSwitch("Автоопределение языка")
         self.auto_detect_toggle.setChecked(config.tts.auto_detect_language)
         self.auto_detect_toggle.toggled.connect(self._on_auto_detect_toggled)
         auto_row.addRow("Автоопределение языка:", self.auto_detect_toggle)
@@ -262,6 +279,10 @@ class TTSTab(QWidget):
 
     def _on_max_chars_changed(self, value: int) -> None:
         self.config.tts.max_chars = value
+        self.config.save()
+
+    def _on_max_backlog_changed(self, value: int) -> None:
+        self.config.tts.max_backlog_messages = value
         self.config.save()
 
     def _on_auto_detect_toggled(self, checked: bool) -> None:

@@ -6,11 +6,13 @@ subprocess Vocari launches fresh on every synthesize() call, not something
 loaded once into this process's own memory."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal
+import threading
+
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from vocari.logging_setup import get_logger
-from vocari.runtime_deps import PIPER_ENGINE, download as download_engine, is_downloaded as is_engine_downloaded
+from vocari.runtime_deps import DownloadCancelled, PIPER_ENGINE, download as download_engine
 from vocari.tts.piper_provider import PiperTTSProvider, download_voice
 from vocari.tts.piper_voices import PIPER_VOICES, PiperVoice
 
@@ -35,11 +37,20 @@ class _DownloadWorker(QObject):
         super().__init__()
         self.key = key
         self._run_download = run_download
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
 
     def run(self) -> None:
         try:
-            self._run_download(lambda done, total: self.progress.emit(self.key, done, total))
+            self._run_download(
+                lambda done, total: self.progress.emit(self.key, done, total),
+                self._cancelled.is_set,
+            )
             self.finished.emit(self.key, "")
+        except DownloadCancelled:
+            self.finished.emit(self.key, "Загрузка отменена")
         except Exception as exc:  # noqa: BLE001 - surface any network/disk error to the UI
             logger.exception("Не удалось скачать (Piper)")
             self.finished.emit(self.key, str(exc))
@@ -53,6 +64,7 @@ class PiperTab(QWidget):
         self._threads: dict[str, QThread] = {}
         self._workers: dict[str, _DownloadWorker] = {}
         self._voices_by_id = {v.voice_id: v for v in PIPER_VOICES}
+        self._shutting_down = False
 
         layout = QVBoxLayout(self)
 
@@ -137,7 +149,12 @@ class PiperTab(QWidget):
         logger.info("Запущено скачивание движка Piper")
 
         thread = QThread(self)
-        worker = _DownloadWorker("engine", lambda on_progress: download_engine(PIPER_ENGINE, on_progress))
+        worker = _DownloadWorker(
+            "engine",
+            lambda on_progress, is_cancelled: download_engine(
+                PIPER_ENGINE, on_progress, is_cancelled=is_cancelled,
+            ),
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._on_progress)
@@ -145,6 +162,7 @@ class PiperTab(QWidget):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_thread_finished)
         self._threads["engine"] = thread
         self._workers["engine"] = worker
         thread.start()
@@ -156,12 +174,22 @@ class PiperTab(QWidget):
             self._refresh_voice_state(voice)
 
     def _refresh_voice_state(self, voice: PiperVoice) -> None:
-        available = self.provider.is_voice_available(voice.voice_id)
+        state = self.provider.voice_state(voice.voice_id)
+        available = state == "ready"
         status = self.voice_status[voice.voice_id]
         button = self.voice_buttons[voice.voice_id]
-        status.setStyleSheet("color:#2ecc71;" if available else "color: gray;")
-        status.setText("готов" if available else "не скачан")
-        button.setText("Скачан" if available else "Скачать")
+        if available:
+            status.setStyleSheet("color:#2ecc71;")
+            status.setText("готов")
+            button.setText("Скачан")
+        elif state == "missing":
+            status.setStyleSheet("color: gray;")
+            status.setText("не скачан")
+            button.setText("Скачать")
+        else:
+            status.setStyleSheet("color:#e6c229;")
+            status.setText("скачан не полностью" if state == "incomplete" else "файлы повреждены")
+            button.setText("Скачать заново")
         button.setEnabled(self.provider.is_engine_available() and not available)
 
     def _start_voice_download(self, voice: PiperVoice) -> None:
@@ -176,7 +204,12 @@ class PiperTab(QWidget):
         logger.info("Запущено скачивание голоса Piper '%s'", key)
 
         thread = QThread(self)
-        worker = _DownloadWorker(key, lambda on_progress, v=voice: download_voice(v, on_progress))
+        worker = _DownloadWorker(
+            key,
+            lambda on_progress, is_cancelled, v=voice: download_voice(
+                v, on_progress, is_cancelled=is_cancelled,
+            ),
+        )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(self._on_progress)
@@ -184,6 +217,7 @@ class PiperTab(QWidget):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_thread_finished)
         self._threads[key] = thread
         self._workers[key] = worker
         thread.start()
@@ -204,6 +238,8 @@ class PiperTab(QWidget):
         status.setText(f"скачано {downloaded // (1024 * 1024)} МБ")
 
     def _on_finished(self, key: str, error: str) -> None:
+        if self._shutting_down:
+            return
         if key == "engine":
             self.engine_progress.hide()
             if error:
@@ -230,3 +266,25 @@ class PiperTab(QWidget):
             # bucket a provider's downloaded voices by language.
             matching = [v for v in self.provider.available_voices() if v.startswith(f"{voice.lang}_")]
             self.on_voices_loaded(voice.lang, matching)
+
+    @Slot()
+    def _on_thread_finished(self) -> None:
+        thread = self.sender()
+        for key, candidate in list(self._threads.items()):
+            if candidate is thread:
+                self._threads.pop(key, None)
+                self._workers.pop(key, None)
+                break
+
+    def shutdown(self) -> None:
+        self._shutting_down = True
+        jobs = [(self._threads[key], worker) for key, worker in list(self._workers.items()) if key in self._threads]
+        for thread, worker in jobs:
+            worker.cancel()
+            thread.requestInterruption()
+            thread.quit()
+        for thread, _worker in jobs:
+            if thread.isRunning():
+                thread.wait()
+        self._threads.clear()
+        self._workers.clear()

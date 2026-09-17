@@ -24,9 +24,9 @@ from typing import Callable
 
 from vocari.logging_setup import get_logger
 from vocari.paths import app_root
-from vocari.runtime_deps import download_raw_file
+from vocari.runtime_deps import PIPER_ENGINE, download_raw_file, is_downloaded, verify_file
 from vocari.tts.base import SynthesisResult, TTSProvider
-from vocari.tts.piper_voices import PiperVoice
+from vocari.tts.piper_voices import PIPER_VOICES, PiperVoice
 
 logger = get_logger("tts.piper")
 
@@ -39,19 +39,62 @@ VOICES_DIR = app_root() / "runtime_deps" / "piper_voices"
 BINARY_NAME = "piper.exe" if sys.platform == "win32" else "piper"
 
 PIPER_MISSING_HINT = 'откройте вкладку "Piper" в настройках и нажмите "Скачать движок Piper"'
+_VOICES_BY_ID = {voice.voice_id: voice for voice in PIPER_VOICES}
+# Provider instances are used by both the settings tab and speech queue. Share
+# successful checks for unchanged files so a 60 MB model is hashed only once
+# per process, while replacements/truncated files invalidate the fingerprint.
+_VOICE_CHECK_CACHE: dict[str, tuple[tuple[int, int, int, int], str]] = {}
+
+
+def _voice_paths(voice_id: str) -> tuple[Path, Path]:
+    return VOICES_DIR / f"{voice_id}.onnx", VOICES_DIR / f"{voice_id}.onnx.json"
+
+
+def _fingerprint(model_path: Path, config_path: Path) -> tuple[int, int, int, int]:
+    model_stat = model_path.stat()
+    config_stat = config_path.stat()
+    return model_stat.st_size, model_stat.st_mtime_ns, config_stat.st_size, config_stat.st_mtime_ns
 
 
 class PiperTTSProvider(TTSProvider):
     def is_engine_available(self) -> bool:
-        return (ENGINE_DIR / BINARY_NAME).exists()
+        return is_downloaded(PIPER_ENGINE) and (ENGINE_DIR / BINARY_NAME).exists()
 
     def is_voice_available(self, voice_id: str) -> bool:
-        return (VOICES_DIR / f"{voice_id}.onnx").exists()
+        return self.voice_state(voice_id) == "ready"
+
+    def voice_state(self, voice_id: str) -> str:
+        """Return missing, incomplete, corrupt, or ready for a catalog voice."""
+        voice = _VOICES_BY_ID.get(voice_id)
+        model_path, config_path = _voice_paths(voice_id)
+        model_exists, config_exists = model_path.is_file(), config_path.is_file()
+        if not model_exists and not config_exists:
+            return "missing"
+        if not model_exists or not config_exists:
+            return "incomplete"
+        if voice is None:
+            return "corrupt"  # no pinned hashes means it cannot be trusted
+        try:
+            fingerprint = _fingerprint(model_path, config_path)
+        except OSError:
+            return "incomplete"
+        cached = _VOICE_CHECK_CACHE.get(voice_id)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        try:
+            verify_file(model_path, voice.onnx_sha256)
+            verify_file(config_path, voice.config_sha256)
+        except (OSError, ValueError):
+            state = "corrupt"
+        else:
+            state = "ready"
+        _VOICE_CHECK_CACHE[voice_id] = fingerprint, state
+        return state
 
     def available_voices(self) -> list[str]:
         if not VOICES_DIR.exists():
             return []
-        return sorted(p.stem for p in VOICES_DIR.glob("*.onnx"))
+        return sorted(voice_id for voice_id in _VOICES_BY_ID if self.is_voice_available(voice_id))
 
     async def synthesize(
         self,
@@ -108,7 +151,11 @@ class PiperTTSProvider(TTSProvider):
         return SynthesisResult(audio=audio, format="wav")
 
 
-def download_voice(voice: PiperVoice, on_progress: Callable[[int, int], None]) -> None:
+def download_voice(
+    voice: PiperVoice,
+    on_progress: Callable[[int, int], None],
+    is_cancelled: Callable[[], bool] | None = None,
+) -> None:
     """Blocking — call from a background thread, not the Qt main thread.
     Downloads a voice's two files (the .onnx model + its .onnx.json config,
     both required) straight from Hugging Face into VOICES_DIR — see
@@ -121,5 +168,12 @@ def download_voice(voice: PiperVoice, on_progress: Callable[[int, int], None]) -
     # The .onnx is ~60 MB, its .json a few KB — treat the .onnx download as
     # essentially the whole thing for progress purposes rather than trying
     # to divide total_bytes across two separate HTTP responses.
-    download_raw_file(voice.onnx_url, onnx_path, on_progress)
-    download_raw_file(voice.config_url, config_path, lambda _d, _t: None)
+    download_raw_file(
+        voice.onnx_url, onnx_path, on_progress, sha256=voice.onnx_sha256,
+        is_cancelled=is_cancelled,
+    )
+    download_raw_file(
+        voice.config_url, config_path, lambda _d, _t: None, sha256=voice.config_sha256,
+        is_cancelled=is_cancelled,
+    )
+    _VOICE_CHECK_CACHE.pop(voice.voice_id, None)

@@ -97,6 +97,9 @@ class AvatarInstance:
     eye_look: tuple[float, float] = (0.0, 0.0)
     eye_look_target: tuple[float, float] = (0.0, 0.0)
     eye_look_hold_s: float = field(default_factory=lambda: random.uniform(0.6, 2.2))
+    # Monotonic deadline assigned by TTSQueue, preserved from the reserve.
+    # None for previews or instances created outside the speech queue.
+    queue_deadline: float | None = None
 
 
 class Stage:
