@@ -71,16 +71,35 @@ class SileroTTSProvider(TTSProvider):
     def is_loaded(self, lang: str) -> bool:
         return lang in self._models
 
-    def preload(self, lang: str) -> None:
+    @staticmethod
+    def _model_candidates(lang: str) -> tuple[Path, Path]:
+        model_id = MODEL_ID_BY_LANG[lang]
+        return (
+            CACHE_DIR / "verified" / f"{model_id}.pt",
+            CACHE_DIR / "snakers4_silero-models_master" / "src" / "silero" / "model" / f"{model_id}.pt",
+        )
+
+    def has_cached_model(self, lang: str) -> bool:
+        """Cheap startup check; preload() performs the full SHA-256 check."""
+        return any(path.is_file() for path in self._model_candidates(lang))
+
+    def remove_cached_model(self, lang: str) -> None:
+        """Forget a loaded model and remove every supported cache layout."""
+        self._models.pop(lang, None)
+        for path in self._model_candidates(lang):
+            path.unlink(missing_ok=True)
+        logger.info("Silero: удалена скачанная модель языка %s", lang)
+
+    def preload(self, lang: str, *, allow_download: bool = True) -> None:
         """Blocking (network + CPU-bound) — call from a background thread,
         not the Qt main thread. Loads the model for `lang` and runs one
         throwaway synthesis to warm up its JIT graph, so the user's actual
         first message is fast too (see Settings -> Silero)."""
         # A UI preload and incoming speech can request the same download.
         with self._load_lock:
-            self._preload(lang)
+            self._preload(lang, allow_download=allow_download)
 
-    def _preload(self, lang: str) -> None:
+    def _preload(self, lang: str, *, allow_download: bool = True) -> None:
         if lang in self._models:
             return
         model_id = MODEL_ID_BY_LANG.get(lang)
@@ -104,30 +123,33 @@ class SileroTTSProvider(TTSProvider):
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         logger.info("Silero: загрузка модели %s (%s)...", model_id, lang)
-        model_path = self._verified_model_path(lang)
+        model_path = self._verified_model_path(lang, allow_download=allow_download)
         model = torch.package.PackageImporter(str(model_path)).load_pickle("tts_models", "model")
         model.to(self._device)
         model.apply_tts(text=WARMUP_TEXT.get(lang, "Test."), speaker=model.speakers[0], sample_rate=SAMPLE_RATE)
         self._models[lang] = model
         logger.info("Silero: модель %s готова (%d голосов)", model_id, len(model.speakers))
 
-    def _verified_model_path(self, lang: str) -> Path:
-        model_id = MODEL_ID_BY_LANG[lang]
+    def _verified_model_path(self, lang: str, *, allow_download: bool = True) -> Path:
         sha256 = MODEL_SHA256_BY_LANG[lang]
-        path = CACHE_DIR / "verified" / f"{model_id}.pt"
+        path, legacy = self._model_candidates(lang)
         # Reuse old downloads only after checking their bytes. No Python from
         # the old torch.hub repository/cache is imported or executed.
-        legacy = CACHE_DIR / "snakers4_silero-models_master" / "src" / "silero" / "model" / f"{model_id}.pt"
         for candidate in (path, legacy):
             if candidate.is_file():
                 try:
                     verify_file(candidate, sha256)
-                except ValueError:
+                except (OSError, ValueError):
                     logger.warning("Silero: контрольная сумма кеша не совпала (%s)", candidate.name)
                 else:
                     return candidate
+        if not allow_download:
+            raise ValueError(
+                "Скачанная модель отсутствует, повреждена или недоступна. "
+                "Нажмите «Скачать заново» для восстановления."
+            )
         download_raw_file(
-            f"https://models.silero.ai/models/tts/{lang}/{model_id}.pt",
+            f"https://models.silero.ai/models/tts/{lang}/{MODEL_ID_BY_LANG[lang]}.pt",
             path, lambda _d, _t: None, sha256=sha256,
         )
         return path

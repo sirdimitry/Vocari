@@ -13,11 +13,12 @@ import sys
 import threading
 from typing import Callable
 
-from PySide6.QtCore import QObject, QProcess, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QProcess, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -43,7 +44,8 @@ def _torch_available() -> bool:
     ensure_on_path(TORCH_CPU)
     try:
         import torch  # noqa: F401
-    except ImportError:
+    except (ImportError, OSError):
+        logger.warning("PyTorch недоступен", exc_info=True)
         return False
     return True
 
@@ -51,10 +53,11 @@ def _torch_available() -> bool:
 class _PreloadWorker(QObject):
     finished = Signal(str, str, str)  # lang, speaker_count_or_empty, error message ("" on success)
 
-    def __init__(self, provider: SileroTTSProvider, lang: str):
+    def __init__(self, provider: SileroTTSProvider, lang: str, *, cached_only: bool = False):
         super().__init__()
         self.provider = provider
         self.lang = lang
+        self.cached_only = cached_only
         self._cancelled = threading.Event()
 
     def cancel(self) -> None:
@@ -64,7 +67,10 @@ class _PreloadWorker(QObject):
         try:
             if self._cancelled.is_set():
                 return
-            self.provider.preload(self.lang)
+            if self.cached_only:
+                self.provider.preload(self.lang, allow_download=False)
+            else:
+                self.provider.preload(self.lang)
             if self._cancelled.is_set():
                 return
             speakers = self.provider.speakers(self.lang)
@@ -119,6 +125,15 @@ class SileroTab(QWidget):
         else:
             self._build_torch_download_ui()
 
+        if not hasattr(self, "preload_buttons"):
+            # Model files persist independently of the optional PyTorch runtime.
+            for lang, title in LANGUAGES:
+                cached = self.provider.has_cached_model(lang)
+                state = "скачана; для проверки и запуска нужен PyTorch" if cached else "не скачана"
+                label = QLabel(f"{title}: {state}")
+                label.setWordWrap(True)
+                self.layout_.insertWidget(self.layout_.count() - 1, label)
+
     def _build_linux_info_ui(self) -> None:
         note = QLabel(
             "Автоматическая загрузка PyTorch сейчас доступна только в Windows. "
@@ -137,9 +152,9 @@ class SileroTab(QWidget):
         intro = QLabel(
             "Silero — бесплатный офлайн-синтез речи: модель скачивается один раз "
             "(десятки МБ) и дальше работает на процессоре без интернета и без "
-            "видеокарты. Первое сообщение после запуска приложения без предзагрузки "
-            "будет с задержкой (скачивание + разогрев модели) — нажмите кнопку ниже "
-            "заранее, чтобы озвучка сразу была быстрой."
+            "видеокарты. При каждом запуске все скачанные языковые модели "
+            "автоматически проверяются и загружаются в память с диска. "
+            "Повторное скачивание для исправных моделей не требуется."
         )
         intro.setWordWrap(True)
         self.layout_.addWidget(intro)
@@ -152,12 +167,13 @@ class SileroTab(QWidget):
             row.addWidget(QLabel(title))
             row.addStretch()
 
-            status_label = QLabel("не загружена")
+            cached = getattr(self.provider, "has_cached_model", lambda _lang: False)(lang)
+            status_label = QLabel("скачана — ожидает проверки" if cached else "не скачана")
             status_label.setStyleSheet("color: gray;")
             self.status_labels[lang] = status_label
             row.addWidget(status_label)
 
-            button = QPushButton("Предзагрузить")
+            button = QPushButton("Проверить и загрузить" if cached else "Скачать и загрузить")
             button.clicked.connect(lambda _checked, lang=lang: self._start_preload(lang))
             self.preload_buttons[lang] = button
             row.addWidget(button)
@@ -174,18 +190,65 @@ class SileroTab(QWidget):
         compat_note.setStyleSheet("color: gray; font-size: 11px; margin-top: 8px;")
         self.layout_.addWidget(compat_note)
 
-        self.layout_.addStretch()
+        self.clear_button = QPushButton("Удалить скачанные модели Silero")
+        self.clear_button.clicked.connect(self._clear_downloaded_models)
+        self.layout_.addWidget(self.clear_button)
 
-    def _start_preload(self, lang: str) -> None:
+        self.layout_.addStretch()
+        # Cached files survive restart/update while provider memory does not.
+        # Verify and load every detected language in the background, then
+        # publish each model's complete speaker list to the TTS tab.
+        QTimer.singleShot(0, self._auto_load_cached_models)
+
+    def _auto_load_cached_models(self) -> None:
+        if self._shutting_down:
+            return
+        has_cached_model = getattr(self.provider, "has_cached_model", None)
+        if has_cached_model is None:
+            return
+        for lang, _title in LANGUAGES:
+            if self.provider.is_loaded(lang) or has_cached_model(lang):
+                self.status_labels[lang].setText("найдена, проверка…")
+                self._start_preload(lang, cached_only=True)
+
+    def _clear_downloaded_models(self) -> None:
+        if self._threads:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Очистить модели Silero",
+            "Удалить все скачанные языковые модели Silero? При следующей загрузке они будут скачаны заново.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for lang, _title in LANGUAGES:
+                self.provider.remove_cached_model(lang)
+                self.status_labels[lang].setStyleSheet("color: gray;")
+                self.status_labels[lang].setText("не скачана")
+                self.preload_buttons[lang].setText("Скачать и загрузить")
+                self.preload_buttons[lang].setEnabled(True)
+                if self.on_voices_loaded:
+                    self.on_voices_loaded(lang, [])
+        except OSError as exc:
+            QMessageBox.warning(self, "Не удалось очистить Silero", str(exc))
+
+    def _start_preload(self, lang: str, *, cached_only: bool = False) -> None:
+        if self._shutting_down or lang in self._threads:
+            return
         if self.provider.is_loaded(lang):
+            self._on_preload_finished(lang, str(len(self.provider.speakers(lang))), "")
             return
         self.preload_buttons[lang].setEnabled(False)
+        self.clear_button.setEnabled(False)
         self.status_labels[lang].setStyleSheet("color: gray;")
-        self.status_labels[lang].setText("загрузка…")
+        self.status_labels[lang].setText(
+            "скачана — проверка и загрузка с диска…" if cached_only else "загрузка…"
+        )
         logger.info("Запущена предзагрузка модели Silero (%s)", lang)
 
         thread = QThread(self)
-        worker = _PreloadWorker(self.provider, lang)
+        worker = _PreloadWorker(self.provider, lang, cached_only=cached_only)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_preload_finished)
@@ -204,9 +267,10 @@ class SileroTab(QWidget):
             self.status_labels[lang].setStyleSheet("color:#ff5c5c;")
             self.status_labels[lang].setText(f"ошибка: {error}")
             self.preload_buttons[lang].setEnabled(True)
+            self.preload_buttons[lang].setText("Скачать заново")
             return
         self.status_labels[lang].setStyleSheet("color:#2ecc71;")
-        self.status_labels[lang].setText(f"готова ({speaker_count} голосов)")
+        self.status_labels[lang].setText(f"скачана и готова ({speaker_count} голосов)")
         self.preload_buttons[lang].setEnabled(False)
         self.preload_buttons[lang].setText("Загружена")
         if self.on_voices_loaded:
@@ -325,6 +389,8 @@ class SileroTab(QWidget):
                 self._threads.pop(lang, None)
                 self._workers.pop(lang, None)
                 break
+        if hasattr(self, "clear_button"):
+            self.clear_button.setEnabled(not self._threads)
 
     @Slot()
     def _on_torch_thread_finished(self) -> None:

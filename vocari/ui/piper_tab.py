@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from vocari.logging_setup import get_logger
 from vocari.runtime_deps import DownloadCancelled, PIPER_ENGINE, download as download_engine
@@ -125,23 +125,34 @@ class PiperTab(QWidget):
             grid.addWidget(progress, row_index, 0, 1, 4)
             row_index += 1
 
+        self.clear_button = QPushButton("Удалить движок и скачанные голоса Piper")
+        self.clear_button.clicked.connect(self._clear_downloads)
+        layout.addWidget(self.clear_button)
         layout.addStretch()
         self._refresh_engine_state()
         self._refresh_all_voice_states()
+        self._publish_available_voices()
 
     # -- engine ---------------------------------------------------------------
 
     def _refresh_engine_state(self) -> None:
-        available = self.provider.is_engine_available()
+        state = self.provider.engine_state()
+        available = state == "ready"
         self.engine_status.setStyleSheet("color:#2ecc71;" if available else "color: gray;")
-        self.engine_status.setText("готов" if available else "не скачан")
-        self.engine_button.setText("Скачан" if available else "Скачать движок Piper")
+        self.engine_status.setText(
+            "готов" if available else
+            "файлы найдены, требуется восстановление или обновление" if state == "unverified" else "не скачан"
+        )
+        self.engine_button.setText(
+            "Скачан" if available else "Скачать заново" if state == "unverified" else "Скачать движок Piper"
+        )
         self.engine_button.setEnabled(not available)
         for voice in PIPER_VOICES:
             self.voice_buttons[voice.voice_id].setEnabled(available and not self.provider.is_voice_available(voice.voice_id))
 
     def _start_engine_download(self) -> None:
         self.engine_button.setEnabled(False)
+        self.clear_button.setEnabled(False)
         self.engine_progress.setRange(0, 0)
         self.engine_progress.show()
         self.engine_status.setStyleSheet("color: gray;")
@@ -171,7 +182,37 @@ class PiperTab(QWidget):
 
     def _refresh_all_voice_states(self) -> None:
         for voice in PIPER_VOICES:
-            self._refresh_voice_state(voice)
+            if voice.voice_id not in self._threads:
+                self._refresh_voice_state(voice)
+        self.clear_button.setEnabled(
+            not self._threads
+        )
+
+    def _publish_available_voices(self) -> None:
+        if not self.on_voices_loaded:
+            return
+        available = self.provider.available_voices()
+        for lang in {voice.lang for voice in PIPER_VOICES}:
+            self.on_voices_loaded(lang, [voice for voice in available if voice.startswith(f"{lang}_")])
+
+    def _clear_downloads(self) -> None:
+        if self._threads:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Очистить Piper",
+            "Удалить движок Piper и все скачанные голоса? Их можно будет скачать заново.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.provider.remove_all_downloads()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось очистить Piper", str(exc))
+            return
+        self._refresh_engine_state()
+        self._refresh_all_voice_states()
+        self._publish_available_voices()
 
     def _refresh_voice_state(self, voice: PiperVoice) -> None:
         state = self.provider.voice_state(voice.voice_id)
@@ -195,6 +236,7 @@ class PiperTab(QWidget):
     def _start_voice_download(self, voice: PiperVoice) -> None:
         key = voice.voice_id
         self.voice_buttons[key].setEnabled(False)
+        self.clear_button.setEnabled(False)
         progress = self.voice_progress[key]
         progress.setRange(0, 0)
         progress.show()
@@ -275,6 +317,7 @@ class PiperTab(QWidget):
                 self._threads.pop(key, None)
                 self._workers.pop(key, None)
                 break
+        self._refresh_all_voice_states()
 
     def shutdown(self) -> None:
         self._shutting_down = True

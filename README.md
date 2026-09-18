@@ -114,14 +114,19 @@ Run it:
 ```powershell
 .\.venv\Scripts\pip install -r requirements-dev.txt
 .\.venv\Scripts\pyinstaller.exe vocari.spec --noconfirm
-xcopy /E /I assets dist\Vocari\assets
+mkdir dist\Vocari\assets\branding
+xcopy /E /I assets\models dist\Vocari\assets\models
+copy assets\branding\icon.ico dist\Vocari\assets\branding\icon.ico
+copy assets\branding\icon.png dist\Vocari\assets\branding\icon.png
 ```
 
 The result is a `dist\Vocari\` folder (not a single file: `--onedir`, not `--onefile`) with `Vocari.exe` and a supporting `_internal\`. The whole folder can be moved/archived and handed out as-is — `config.json`, `logs\`, and `silero_cache\` are created next to `Vocari.exe` on first run, exactly like next to the script when running from source (see `vocari/paths.py`), and never end up inside the build itself.
 
 torch (and Silero with it) is deliberately **excluded** from the build (`excludes` in `vocari.spec`) — even if it's installed in your dev `.venv`, it won't make it into the `.exe`: ~600 MB is a cost every user would pay, even the ones who never touch Silero. Instead, the Silero settings tab downloads a prebuilt CPU torch build on demand (the "Download offline voices" button, ~160 MB) from the `runtime-deps-torch-cpu-v1` release of this same GitHub repo — see `vocari/runtime_deps.py`. It downloads once into `runtime_deps\` next to `Vocari.exe` (also in `.gitignore`), after which the app asks to be restarted — from then on Silero works fully offline, with no further network calls.
 
-The Ariral model (`assets/`) isn't embedded into the build by PyInstaller — it's copied alongside as a plain folder (the `xcopy` above), so importing your own models (Settings → Model) can keep writing new folders there, same as when running from source.
+The bundled avatar models and the two application icons aren't embedded into the build by PyInstaller — they're copied alongside as plain files, so importing your own models (Settings → Model) can keep writing new folders there, same as when running from source. The GitHub banner is documentation artwork and is deliberately left out of the application and installer.
+
+Downloaded Silero language models are detected in both the current and legacy cache layouts on every startup, verified, and loaded from disk automatically. This startup check never downloads replacement files: damaged models show an error and can be downloaded again explicitly. Piper checks all catalog voices and distinguishes missing, incomplete, and damaged files. An existing engine that needs updating is shown separately from a missing engine.
 
 ### Building the installer
 

@@ -16,6 +16,7 @@ actually want a given Piper voice pay for its download.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,7 +25,7 @@ from typing import Callable
 
 from vocari.logging_setup import get_logger
 from vocari.paths import app_root
-from vocari.runtime_deps import PIPER_ENGINE, download_raw_file, is_downloaded, verify_file
+from vocari.runtime_deps import PIPER_ENGINE, download_raw_file, is_downloaded, remove, verify_file
 from vocari.tts.base import SynthesisResult, TTSProvider
 from vocari.tts.piper_voices import PIPER_VOICES, PiperVoice
 
@@ -59,6 +60,13 @@ def _fingerprint(model_path: Path, config_path: Path) -> tuple[int, int, int, in
 class PiperTTSProvider(TTSProvider):
     def is_engine_available(self) -> bool:
         return is_downloaded(PIPER_ENGINE) and (ENGINE_DIR / BINARY_NAME).exists()
+
+    def engine_state(self) -> str:
+        if self.is_engine_available():
+            return "ready"
+        if ENGINE_DIR.parent.exists():
+            return "unverified"
+        return "missing"
 
     def is_voice_available(self, voice_id: str) -> bool:
         return self.voice_state(voice_id) == "ready"
@@ -95,6 +103,16 @@ class PiperTTSProvider(TTSProvider):
         if not VOICES_DIR.exists():
             return []
         return sorted(voice_id for voice_id in _VOICES_BY_ID if self.is_voice_available(voice_id))
+
+    def remove_all_downloads(self) -> None:
+        """Delete the managed engine and all voice files for a clean retry."""
+        if VOICES_DIR.is_symlink() or VOICES_DIR.resolve().parent != (app_root() / "runtime_deps").resolve():
+            raise ValueError("Недопустимый путь удаления голосов Piper")
+        remove(PIPER_ENGINE)
+        if VOICES_DIR.exists():
+            shutil.rmtree(VOICES_DIR)
+        _VOICE_CHECK_CACHE.clear()
+        logger.info("Удалены движок и скачанные голоса Piper")
 
     async def synthesize(
         self,

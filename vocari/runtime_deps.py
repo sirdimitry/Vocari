@@ -180,6 +180,18 @@ def ensure_all_on_path() -> None:
         ensure_on_path(dep)
 
 
+def remove(dep: RuntimeDep) -> None:
+    """Remove one app-managed runtime dependency without following links."""
+    target = _dep_path(dep)
+    if target.is_symlink() or target.resolve().parent != RUNTIME_DEPS_DIR.resolve():
+        raise ValueError("Недопустимый путь удаления зависимости")
+    if target.exists():
+        shutil.rmtree(target)
+    for suffix in (".download.zip", ".download.tar.gz"):
+        (RUNTIME_DEPS_DIR / f"{dep.dir_name}{suffix}").unlink(missing_ok=True)
+    logger.info("Удалена зависимость: %s", dep.label)
+
+
 def download(
     dep: RuntimeDep,
     on_progress: Callable[[int, int], None],

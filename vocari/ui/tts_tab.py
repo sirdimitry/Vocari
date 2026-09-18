@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QComboBox, QFormLayout, QHBoxLayout, QLabel, QSpin
 
 from vocari.config.settings import AppConfig
 from vocari.logging_setup import get_logger
-from vocari.tts.voices import EDGE_EN_VOICES, EDGE_RU_VOICES, SILERO_EN_VOICES, SILERO_RU_VOICES
+from vocari.tts.voices import EDGE_EN_VOICES, EDGE_RU_VOICES
 from vocari.ui.widgets import ToggleSwitch
 
 logger = get_logger("settings_window")
@@ -31,15 +31,10 @@ class TTSTab(QWidget):
     def __init__(self, config: AppConfig):
         super().__init__()
         self.config = config
-        # Filled in with the real speaker list once Silero actually loads a
-        # model (see set_silero_voices(), called from Settings -> Silero
-        # after a successful preload) - until then this stays the small
-        # static sample from vocari/tts/voices.py, since the model hasn't
-        # loaded yet and there's nothing truer to show.
-        self._silero_voices: dict[str, list[str]] = {
-            "ru": list(SILERO_RU_VOICES),
-            "en": list(SILERO_EN_VOICES),
-        }
+        # Populated only from a verified, loaded model. A five-item sample
+        # used here previously looked like a real installed voice list after
+        # every restart and hid the other speakers from cached models.
+        self._silero_voices: dict[str, list[str]] = {"ru": [], "en": []}
         # Same idea as _silero_voices, but Piper starts genuinely empty -
         # nothing's downloaded until the user does so from Settings -> Piper
         # (see set_piper_voices()), unlike Silero/edge which always have at
@@ -52,7 +47,8 @@ class TTSTab(QWidget):
         self.provider_combo = QComboBox()
         for key, title in PROVIDERS:
             self.provider_combo.addItem(title, key)
-        self.provider_combo.setCurrentIndex(0 if config.tts.provider == "edge" else 1)
+        provider_index = self.provider_combo.findData(config.tts.provider)
+        self.provider_combo.setCurrentIndex(max(0, provider_index))
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         form.addRow("Озвучка (движок):", self.provider_combo)
 
@@ -213,12 +209,11 @@ class TTSTab(QWidget):
         self.rate_hint.setVisible(is_offline)
 
         if provider == "silero":
-            loaded = len(ru_pool) > len(SILERO_RU_VOICES) or len(en_pool) > len(SILERO_EN_VOICES)
             self.voices_hint.setText(
-                f"Полный список голосов Silero ({len(ru_pool)} RU, {len(en_pool)} EN)."
-                if loaded
-                else "Список — небольшой стандартный набор; полный (119 EN, 6 RU) появится "
-                "здесь сам после предзагрузки модели на вкладке «Silero»."
+                f"Проверенные модели Silero: {len(ru_pool)} RU, {len(en_pool)} EN."
+                if ru_pool or en_pool
+                else "Скачанные модели Silero пока не найдены или ещё проверяются. Полные списки "
+                "голосов появятся автоматически после проверки файлов."
             )
         elif provider == "piper":
             self.voices_hint.setText(
